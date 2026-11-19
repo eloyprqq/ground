@@ -999,18 +999,20 @@ function startTeam(players) {
   net.myTeam = me ? me.team : 0;
   S.screen = 'battle'; S.pause = false; nameEl.blur();
 }
-function startAiTeam(size, me, ally) {
+function rollChar() { return CHARS[Math.floor(Math.random() * CHARS.length)].id; }
+function startAiTeam(size, me) {
   const half = size / 2;
   const players = [];
   for (let i = 0; i < half; i++) {
+    const ally = i === 0 ? me : rollChar();
     players.push({
       id: i === 0 ? myId : ('ally' + i),
       name: i === 0 ? myName() : charOf(ally).name,
-      char: i === 0 ? me : ally
+      char: ally
     });
   }
   for (let i = 0; i < half; i++) {
-    const foe = CHARS[Math.floor(Math.random() * CHARS.length)].id;
+    const foe = rollChar();
     players.push({id:'foe' + i, name:charOf(foe).name, char:foe});
   }
   net.role = null;
@@ -1900,16 +1902,12 @@ function frameMenu() {
   } else if (S.screen === 'aimode') {
     showName(false);
     text('AI 대전', x, 88, 26, '#eceae4');
-    text('팀전은 아군만 고릅니다. 상대는 각자 무작위로 나옵니다.', x, 126, 14, '#8d8a82');
+    text('팀전은 내 캐릭터만 고릅니다. 나머지는 각자 무작위로 나옵니다.', x, 126, 14, '#8d8a82');
     button(x, 168, 260, 40, '1대1', () => {
       openPick('내 캐릭터', c => { S.me = c; openPick('AI 캐릭터', f => startDuel(c, f, {ai:true, name2:'AI'})); });
     });
-    button(x, 212, 260, 40, '2대2', () => {
-      openPick('내 캐릭터', me => openPick('아군', ally => startAiTeam(4, me, ally)));
-    });
-    button(x, 256, 260, 40, '3대3', () => {
-      openPick('내 캐릭터', me => openPick('아군', ally => startAiTeam(6, me, ally)));
-    });
+    button(x, 212, 260, 40, '2대2', () => openPick('내 캐릭터', me => startAiTeam(4, me)));
+    button(x, 256, 260, 40, '3대3', () => openPick('내 캐릭터', me => startAiTeam(6, me)));
     button(x, H - 72, 120, 40, '뒤로', () => { S.screen = 'title'; });
   } else if (S.screen === 'help') {
     showName(false);
