@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>그라운드</title>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
 <style>
   html,body{margin:0;height:100%;background:#121418;overflow:hidden;font-family:"Malgun Gothic","Apple SD Gothic Neo",sans-serif;color:#eceae4}
   canvas{display:block;width:100%;height:100%;cursor:crosshair}
@@ -19,6 +21,13 @@
 (() => {
 'use strict';
 const DB = 'https://ground-81292-default-rtdb.asia-southeast1.firebasedatabase.app';
+const FBAPP = {
+  apiKey: '',
+  authDomain: 'ground-81292.firebaseapp.com',
+  databaseURL: DB,
+  projectId: 'ground-81292',
+  appId: ''
+};
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const nameEl = document.getElementById('nm');
@@ -78,6 +87,8 @@ try { progress = Object.assign(progress, JSON.parse(localStorage.getItem('ground
 
 const S = {screen:'title', back:'title', code:'', me:'charger', foe:'spinner', coop:false, which:'slime', pause:false, pickTitle:'', pickCb:null, qsize:2};
 const fb = {state:'unknown', msg:''};
+const acct = {user:null, coin:0, pp:0, rise:{}, msg:'', busy:false, ready:false};
+let acctGen = 0, acctSave = Promise.resolve();
 const net = {role:null, code:'', room:null, busy:false, acc:0, inAcc:0, myTeam:0, viewFresh:false, outSeq:0, remotes:{}, remoteAt:{}, taps:{}};
 
 nameEl.value = localStorage.getItem('ground-name') || '플레이어';
@@ -87,6 +98,110 @@ function myName() {
   return v;
 }
 function saveProgress() { localStorage.setItem('ground-save', JSON.stringify(progress)); }
+function authReady() { return typeof firebase !== 'undefined' && firebase.auth && FBAPP.apiKey; }
+function initAuth() {
+  if (!authReady() || acct._init) return;
+  acct._init = true;
+  firebase.initializeApp(FBAPP);
+  firebase.auth().onAuthStateChanged(user => {
+    acctGen++;
+    if (!user) {
+      acct.user = null; acct.coin = 0; acct.pp = 0; acct.rise = {}; acct.ready = false;
+      return;
+    }
+    acct.user = {uid:user.uid, name:(user.displayName || '플레이어').slice(0, 12), email:user.email || ''};
+    acct.ready = false;
+    if ((localStorage.getItem('ground-name') || '플레이어') === '플레이어' && user.displayName) {
+      nameEl.value = acct.user.name;
+      localStorage.setItem('ground-name', nameEl.value);
+    }
+    loadAccount();
+  });
+}
+async function loadAccount() {
+  if (!acct.user) return;
+  const gen = acctGen, uid = acct.user.uid;
+  const local = readLocal(uid);
+  try {
+    const data = await fbReq('GET', '/users/' + uid) || {};
+    if (gen !== acctGen || !acct.user || acct.user.uid !== uid) return;
+    acct.coin = data.coin || 0;
+    acct.pp = data.pp || 0;
+    acct.rise = data.rise || {};
+    acct.ready = true;
+    writeLocal(uid);
+  } catch (e) {
+    if (gen !== acctGen || !acct.user || acct.user.uid !== uid) return;
+    if (local) { acct.coin = local.coin || 0; acct.pp = local.pp || 0; acct.rise = local.rise || {}; }
+    acct.ready = true;
+    if (e && (e.status === 401 || e.status === 403)) acct.msg = '서버 규칙에 users를 열어야 다른 기기와 맞춰집니다';
+    else acct.msg = '계정을 불러오지 못했습니다';
+  }
+}
+function readLocal(uid) {
+  try { return JSON.parse(localStorage.getItem('ground-acct-' + uid) || 'null'); } catch (e) { return null; }
+}
+function writeLocal(uid) {
+  localStorage.setItem('ground-acct-' + uid, JSON.stringify({coin:acct.coin | 0, pp:acct.pp | 0, rise:acct.rise}));
+}
+function saveAccount() {
+  if (!acct.user) return;
+  const uid = acct.user.uid;
+  writeLocal(uid);
+  const body = {name:acct.user.name, coin:acct.coin | 0, pp:acct.pp | 0, rise:Object.assign({}, acct.rise), ts:Date.now()};
+  acctGen++;
+  acctSave = acctSave.then(() => fbReq('PATCH', '/users/' + uid, body)).catch(e => {
+    acct.msg = e && (e.status === 401 || e.status === 403) ? '서버 규칙에 users를 열어야 다른 기기와 맞춰집니다' : '계정을 저장하지 못했습니다';
+  });
+}
+async function googleLogin() {
+  acct.msg = '';
+  if (!authReady()) { acct.msg = 'Firebase 웹 앱 설정이 아직 없습니다'; return; }
+  initAuth();
+  acct.busy = true;
+  try {
+    const provider = new firebase.auth.GoogleAuthProvider();
+    await firebase.auth().signInWithPopup(provider);
+  } catch (e) {
+    const code = e && e.code || '';
+    acct.msg = code === 'auth/unauthorized-domain' ? '이 주소는 Firebase 승인 도메인에 없습니다'
+      : code === 'auth/popup-blocked' ? '팝업이 막혀 있습니다'
+      : code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request' ? ''
+      : code === 'auth/operation-not-allowed' ? 'Google 로그인이 꺼져 있습니다'
+      : '로그인에 실패했습니다';
+  }
+  acct.busy = false;
+}
+function googleLogout() {
+  acct.msg = '';
+  if (typeof firebase !== 'undefined' && firebase.auth) firebase.auth().signOut().catch(() => {});
+  acct.user = null; acct.coin = 0; acct.pp = 0; acct.rise = {}; acct.ready = false;
+}
+function raiseChar(id) {
+  if (!acct.user) return;
+  const lv = acct.rise[id] || 0;
+  if (lv >= 10) return;
+  const cost = lv + 1;
+  if (acct.pp < cost) { acct.msg = 'PP가 부족합니다'; return; }
+  acct.msg = '';
+  acct.pp -= cost;
+  acct.rise[id] = lv + 1;
+  saveAccount();
+}
+function playerWon() {
+  if (!game || game.winTeam == null || game.winTeam < 0) return false;
+  if (game.mode === 'raid') return game.winTeam === 0;
+  const mine = myFighter();
+  return !!(mine && mine.team === game.winTeam);
+}
+function claimReward() {
+  if (!game || !game.over || game.rewarded || !acct.user || !acct.ready) return;
+  game.rewarded = true;
+  if (playerWon()) { acct.coin += 10; acct.pp += 1; game.grant = {coin:10, pp:1}; }
+  else if (game.winTeam != null && game.winTeam >= 0) { acct.coin += 2; game.grant = {coin:2, pp:0}; }
+  else game.grant = null;
+  if (game.grant) saveAccount();
+}
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 function charOf(id) { return CHAR[id] || CHARS[0]; }
 
@@ -2052,7 +2167,13 @@ function renderBattle() {
         }
       } else title = game.winTeam === 0 ? '토벌 성공' : '토벌 실패';
       text(title, x, y, 26, '#eceae4');
-      y += 48;
+      claimReward();
+      y += 40;
+      if (game.grant) {
+        const gain = '+' + game.grant.coin + ' 코인' + (game.grant.pp ? '    +' + game.grant.pp + ' PP' : '');
+        text(gain, x, y, 14, '#8d8a82');
+        y += 32;
+      } else y += 8;
       if (net.role !== 'guest' && game.mode === 'raid' && game.winTeam !== 0) {
         button(x, y, 220, 40, '이 단계 다시', () => { if (net.role === 'host') restartOnline(); else retryRaid(false); });
         y += 44;
@@ -2244,9 +2365,19 @@ function frameMenu() {
     ctx.fillStyle = '#e23b3b';
     ctx.fillRect(x, H * 0.2 + 68, 28, 3);
     const y0 = H * 0.2 + 96;
-    button(x, y0, 240, 42, 'AI 대전', () => { S.screen = 'aimode'; });
-    button(x, y0 + 46, 240, 42, '사람 대전', () => { S.screen = 'pvp'; pingFB(); });
-    button(x, y0 + 92, 240, 42, '조작', () => { S.screen = 'help'; });
+    let menuY = y0;
+    if (acct.user) {
+      text(acct.user.name, x, y0, 15, '#eceae4');
+      text('코인  ' + acct.coin + '     PP  ' + acct.pp, x, y0 + 24, 14, '#8d8a82');
+      menuY = y0 + 56;
+    }
+    button(x, menuY, 240, 42, 'AI 대전', () => { S.screen = 'aimode'; });
+    button(x, menuY + 46, 240, 42, '사람 대전', () => { S.screen = 'pvp'; pingFB(); });
+    button(x, menuY + 92, 240, 42, '조작', () => { S.screen = 'help'; });
+    if (acct.user) button(x, menuY + 138, 240, 42, '상승', () => { acct.msg = ''; S.screen = 'rise'; });
+    if (acct.user) button(x, H - 72, 160, 40, '로그아웃', () => googleLogout());
+    else button(x, H - 72, 220, 40, acct.busy ? '로그인 중' : 'Google로 로그인', () => googleLogin(), {off:acct.busy});
+    if (acct.msg) text(acct.msg, x, H - 104, 13, '#e23b3b');
   } else if (S.screen === 'aimode') {
     showName(false);
     text('AI 대전', x, 88, 26, '#eceae4');
@@ -2275,7 +2406,8 @@ function frameMenu() {
       ['토벌', '그 보너스 없음. 12단계 다음이 보스'],
       ['2P', '방향키, 위 점프, K 좌클릭, L 우클릭'],
       ['잼 그랩', '3대3. 보석을 주워 8개면 카운트. 죽으면 떨어뜨림'],
-      ['배스킷 볼', '3대3. 공 집어 F로 던짐. 빨간 림이나 그물에 몸이 닿으면 1점. 5점']
+      ['배스킷 볼', '3대3. 공 집어 F로 던짐. 빨간 림이나 그물에 몸이 닿으면 1점. 5점'],
+      ['계정', '로그인 후 승리하면 코인 10, PP 1. 패배는 코인 2']
     ];
     const colW = Math.min(460, (W - x * 2 - 40) / 2);
     rows.forEach((ln, i) => {
@@ -2287,6 +2419,23 @@ function frameMenu() {
       text(ln[1], lx + 92, ly, 14, '#eceae4');
     });
     button(x, H - 72, 120, 40, '뒤로', () => { S.screen = 'title'; });
+  } else if (S.screen === 'rise') {
+    showName(false);
+    text('상승', x, 48, 26, '#eceae4');
+    text('PP  ' + acct.pp, x, 88, 14, '#8d8a82');
+    if (acct.msg) text(acct.msg, x + 100, 88, 14, '#e23b3b');
+    const rowH = Math.min(44, Math.floor((H - 188) / CHARS.length));
+    CHARS.forEach((c, i) => {
+      const y = 124 + i * rowH;
+      const lv = acct.rise[c.id] || 0;
+      const maxed = lv >= 10;
+      ctx.fillStyle = c.color;
+      ctx.beginPath(); ctx.arc(x + 8, y + (rowH - 4) / 2, 4, 0, Math.PI * 2); ctx.fill();
+      text(c.name, x + 24, y + 10, 16, '#eceae4');
+      text(String(lv), x + 150, y + 10, 16, '#8d8a82');
+      button(x + 200, y, 120, rowH - 4, maxed ? '최대' : ('PP ' + (lv + 1)), () => raiseChar(c.id), {off:maxed || acct.pp < lv + 1});
+    });
+    button(x, H - 72, 120, 40, '뒤로', () => { acct.msg = ''; S.screen = 'title'; });
   } else if (S.screen === 'pick') {
     showName(false);
     text(S.pickTitle, x, 48, 13, '#8d8a82');
@@ -2295,7 +2444,7 @@ function frameMenu() {
     CHARS.forEach((c, i) => {
       const y = 84 + i * rowH;
       if (pointer.x >= x && pointer.x <= x + 280 && pointer.y >= y && pointer.y <= y + rowH - 2) shown = c;
-      button(x, y, 280, rowH - 2, c.name, () => S.pickCb && S.pickCb(c.id), {pad:34, fs:16});
+      button(x, y, 280, rowH - 2, c.name + (acct.user ? '    상승 ' + (acct.rise[c.id] || 0) : ''), () => S.pickCb && S.pickCb(c.id), {pad:34, fs:16});
       ctx.fillStyle = c.color;
       ctx.beginPath(); ctx.arc(x + 16, y + (rowH - 2) / 2, 4, 0, Math.PI * 2); ctx.fill();
     });
@@ -2334,7 +2483,7 @@ function frameMenu() {
     button(x, 352, 260, 40, '같은 화면', () => openPick('1P', c => { S.me = c; openPick('2P', f => startDuel(c, f, {ai:false, local2p:true, name1:myName(), name2:'2P'})); }));
     if (fb.state === 'denied') {
       text('Realtime Database 규칙에 아래를 넣고 저장하면 매칭이 열립니다.', x, 420, 13, '#8d8a82');
-      text('{ "rules": { "queue": {".read": true, ".write": true}, "rooms": {".read": true, ".write": true} } }', x, 442, 13, '#eceae4');
+      text('{ "rules": { "queue": {".read": true, ".write": true}, "rooms": {".read": true, ".write": true}, "users": {".read": true, ".write": true} } }', x, 442, 13, '#eceae4');
     }
     button(x, H - 72, 120, 40, '뒤로', () => { S.screen = 'title'; });
   } else if (S.screen === 'qmode') {
@@ -2978,7 +3127,8 @@ function loop(now) {
   requestAnimationFrame(loop);
 }
 
-window.G = {get fighters(){return fighters;}, get game(){return game;}, hurt, startDuel, startTeam, DB};
+window.G = {get fighters(){return fighters;}, get game(){return game;}, get acct(){return acct;}, hurt, startDuel, startTeam, DB};
+initAuth();
 requestAnimationFrame(loop);
 })();
 </script>
