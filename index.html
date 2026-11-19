@@ -990,13 +990,28 @@ function startTeam(players) {
     return f;
   });
   const me = fighters.find(f => f.owner === myId);
+  const saved = list.map(p => ({id:p.id, name:p.name, char:p.char}));
   game = {
     mode:'duel', which:null, stage:0, rules:{adds:true, rewards:true},
     addT:4.5, over:false, winTeam:null, bossing:false, local2p:false,
-    setup:{type:'duel', team:list.length > 2}
+    setup:{type:net.role ? 'duel' : 'team', players:saved}
   };
   net.myTeam = me ? me.team : 0;
   S.screen = 'battle'; S.pause = false; nameEl.blur();
+}
+function startAiTeam(size, me, ally, foe) {
+  const half = size / 2;
+  const players = [];
+  for (let i = 0; i < half; i++) {
+    players.push({
+      id: i === 0 ? myId : ('ally' + i),
+      name: i === 0 ? myName() : charOf(ally).name,
+      char: i === 0 ? me : ally
+    });
+  }
+  for (let i = 0; i < half; i++) players.push({id:'foe' + i, name:charOf(foe).name, char:foe});
+  net.role = null;
+  startTeam(players);
 }
 function startDuel(c1, c2, opt = {}) {
   resetWorld();
@@ -1637,7 +1652,8 @@ function renderBattle() {
       } else if (game.mode === 'duel' && !net.role) {
         button(x, y, 220, 40, '다시', () => {
           const s = game.setup;
-          startDuel(s.c1, s.c2, s.opt);
+          if (s && s.type === 'team') startTeam(s.players);
+          else startDuel(s.c1, s.c2, s.opt);
         });
         y += 44;
       }
@@ -1815,11 +1831,23 @@ function frameMenu() {
     ctx.fillStyle = '#e23b3b';
     ctx.fillRect(x, H * 0.2 + 68, 28, 3);
     const y0 = H * 0.2 + 96;
-    button(x, y0, 240, 42, 'AI 대전', () => {
-      openPick('내 캐릭터', c => { S.me = c; openPick('AI 캐릭터', f => startDuel(c, f, {ai:true, name2:'AI'})); });
-    });
+    button(x, y0, 240, 42, 'AI 대전', () => { S.screen = 'aimode'; });
     button(x, y0 + 46, 240, 42, '사람 대전', () => { S.screen = 'pvp'; pingFB(); });
     button(x, y0 + 92, 240, 42, '조작', () => { S.screen = 'help'; });
+  } else if (S.screen === 'aimode') {
+    showName(false);
+    text('AI 대전', x, 88, 26, '#eceae4');
+    text('팀전은 아군과 상대를 한 종류씩 고릅니다.', x, 126, 14, '#8d8a82');
+    button(x, 168, 260, 40, '1대1', () => {
+      openPick('내 캐릭터', c => { S.me = c; openPick('AI 캐릭터', f => startDuel(c, f, {ai:true, name2:'AI'})); });
+    });
+    button(x, 212, 260, 40, '2대2', () => {
+      openPick('내 캐릭터', me => openPick('아군', ally => openPick('상대', foe => startAiTeam(4, me, ally, foe))));
+    });
+    button(x, 256, 260, 40, '3대3', () => {
+      openPick('내 캐릭터', me => openPick('아군', ally => openPick('상대', foe => startAiTeam(6, me, ally, foe))));
+    });
+    button(x, H - 72, 120, 40, '뒤로', () => { S.screen = 'title'; });
   } else if (S.screen === 'help') {
     showName(false);
     text('조작', x, 48, 26, '#eceae4');

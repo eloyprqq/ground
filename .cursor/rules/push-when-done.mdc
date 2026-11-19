@@ -1,0 +1,10 @@
+---
+description: Push finished work to GitHub
+alwaysApply: true
+---
+
+When a requested change is finished, commit it and push to origin without waiting for a separate push request.
+
+- Set GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, and GIT_COMMITTER_EMAIL to eloyprqq and eloyprqq@gmail.com for the commit. Do not change git config.
+- On PowerShell, pass the commit message with a here-string.
+- Do not commit secrets. If there is nothing to commit, do not create an empty commit.
