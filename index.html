@@ -197,8 +197,10 @@ function playerWon() {
 function claimReward() {
   if (!game || !game.over || game.rewarded || !acct.user || !acct.ready) return;
   game.rewarded = true;
-  if (playerWon()) { acct.coin += 10; acct.pp += 1; game.grant = {coin:10, pp:1}; }
-  else if (game.winTeam != null && game.winTeam >= 0) { acct.coin += 2; game.grant = {coin:2, pp:0}; }
+  if (playerWon()) {
+    if (Math.random() < 0.5) { acct.coin += 10; game.grant = {coin:10, pp:0}; }
+    else { acct.pp += 1; game.grant = {coin:0, pp:1}; }
+  } else if (game.winTeam != null && game.winTeam >= 0) { acct.coin += 2; game.grant = {coin:2, pp:0}; }
   else game.grant = null;
   if (game.grant) saveAccount();
 }
@@ -2170,8 +2172,10 @@ function renderBattle() {
       claimReward();
       y += 40;
       if (game.grant) {
-        const gain = '+' + game.grant.coin + ' 코인' + (game.grant.pp ? '    +' + game.grant.pp + ' PP' : '');
-        text(gain, x, y, 14, '#8d8a82');
+        const bits = [];
+        if (game.grant.coin) bits.push('+' + game.grant.coin + ' 코인');
+        if (game.grant.pp) bits.push('+' + game.grant.pp + ' PP');
+        text(bits.join('    '), x, y, 14, '#8d8a82');
         y += 32;
       } else y += 8;
       if (net.role !== 'guest' && game.mode === 'raid' && game.winTeam !== 0) {
@@ -2407,7 +2411,7 @@ function frameMenu() {
       ['2P', '방향키, 위 점프, K 좌클릭, L 우클릭'],
       ['잼 그랩', '3대3. 보석을 주워 8개면 카운트. 죽으면 떨어뜨림'],
       ['배스킷 볼', '3대3. 공 집어 F로 던짐. 빨간 림이나 그물에 몸이 닿으면 1점. 5점'],
-      ['계정', '로그인 후 승리하면 코인 10, PP 1. 패배는 코인 2']
+      ['계정', '로그인 후 승리하면 코인 10 또는 PP 1. 패배는 코인 2']
     ];
     const colW = Math.min(460, (W - x * 2 - 40) / 2);
     rows.forEach((ln, i) => {
