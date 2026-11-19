@@ -1034,6 +1034,7 @@ const HOOPS = [
   {x:2.6, y:5.5, team:1, side:-1},
   {x:BW - 2.6, y:5.5, team:0, side:1}
 ];
+const RIM_W = 18, NET_H = 16;
 function initObjective(kind) {
   game.mode = kind;
   game.rules = {adds:false, rewards:false};
@@ -1191,14 +1192,15 @@ function updateGems(dt) {
   }
 }
 function touchesHoop(f, hoop) {
-  const left = hoop.x - 0.75, right = hoop.x + 0.75;
-  const bottom = hoop.y - 0.15, top = hoop.y + 0.55;
+  const z = (camCache && camCache.z) || 40;
+  const left = hoop.x - (RIM_W + 4) / z, right = hoop.x + (RIM_W + 4) / z;
+  const top = hoop.y + 6 / z, bottom = hoop.y - (NET_H + 4) / z;
   return f.x < right && f.x + f.w > left && f.y < top && f.y + f.h > bottom;
 }
-function scoreHoop(hoop, who) {
-  game.score[hoop.team] = (game.score[hoop.team] || 0) + 1;
+function scoreHoop(team, who) {
+  game.score[team] = (game.score[team] || 0) + 1;
   if (who) who.dunking = true;
-  nums.push({x:hoop.x, y:hoop.y + 0.5, vy:1.6, life:0.8, text:'+1', color:'#eceae4'});
+  nums.push({x:who ? CXx(who) : BW / 2, y:(who ? who.y + who.h : 6) + 0.4, vy:1.6, life:0.8, text:'+1', color:'#eceae4'});
   if (game.ball) {
     if (who && game.ball.holder === who) game.ball.holder = null;
     game.ball.x = BW / 2;
@@ -1208,7 +1210,7 @@ function scoreHoop(hoop, who) {
     game.ball.lock = 0.8;
     game.ball.holder = null;
   }
-  if (game.score[hoop.team] >= game.need) { game.over = true; game.winTeam = hoop.team; }
+  if (game.score[team] >= game.need) { game.over = true; game.winTeam = team; }
 }
 function updateBall(dt) {
   const b = game.ball;
@@ -1217,9 +1219,9 @@ function updateBall(dt) {
   for (const f of fighters) f.throwCd = Math.max(0, (f.throwCd || 0) - dt);
   for (const f of fighters) {
     if (f.dead) { f.dunking = false; continue; }
-    const hoop = HOOPS.find(h => h.team === f.team && touchesHoop(f, h));
+    const hoop = HOOPS.find(h => touchesHoop(f, h));
     if (hoop) {
-      if (!f.dunking) { scoreHoop(hoop, f); return; }
+      if (!f.dunking) { scoreHoop(f.team, f); return; }
     } else f.dunking = false;
   }
   if (game.over) return;
@@ -1946,15 +1948,15 @@ function drawObjectives(cam) {
       ctx.strokeStyle = '#e23b3b';
       ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.moveTo(rim.x - 18, rim.y);
-      ctx.lineTo(rim.x + 18, rim.y);
+      ctx.moveTo(rim.x - RIM_W, rim.y);
+      ctx.lineTo(rim.x + RIM_W, rim.y);
       ctx.stroke();
       ctx.strokeStyle = 'rgba(236,234,228,.45)';
       ctx.lineWidth = 1;
       for (let i = -2; i <= 2; i++) {
         ctx.beginPath();
         ctx.moveTo(rim.x + i * 7, rim.y);
-        ctx.lineTo(rim.x + i * 4, rim.y + 16);
+        ctx.lineTo(rim.x + i * 4, rim.y + NET_H);
         ctx.stroke();
       }
     }
@@ -2273,7 +2275,7 @@ function frameMenu() {
       ['토벌', '그 보너스 없음. 12단계 다음이 보스'],
       ['2P', '방향키, 위 점프, K 좌클릭, L 우클릭'],
       ['잼 그랩', '3대3. 보석을 주워 8개면 카운트. 죽으면 떨어뜨림'],
-      ['배스킷 볼', '3대3. 공 집어 F로 던짐. 골대에 몸이 닿아도 1점. 5점']
+      ['배스킷 볼', '3대3. 공 집어 F로 던짐. 빨간 림이나 그물에 몸이 닿으면 1점. 5점']
     ];
     const colW = Math.min(460, (W - x * 2 - 40) / 2);
     rows.forEach((ln, i) => {
