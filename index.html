@@ -1434,6 +1434,7 @@ function drawActor(e, cam) {
     ctx.beginPath(); ctx.moveTo(pw * 0.18, -ph * 0.62); ctx.lineTo(pw * 0.62, -ph * 0.78); ctx.stroke();
   }
   ctx.restore();
+  drawTeamTag(e, cam);
   if (e.char === 'shifter' && !e.dead) {
     const n = e.clones || 1;
     for (let i = 0; i < n; i++) {
@@ -1565,6 +1566,23 @@ function playerPlate(e, side, keys, dy) {
   }
   if (keys && e.cd && !e.dead) skillRows(e, left ? hx : hx + hw - 132, nameY + 20, keys);
 }
+function teamWord(e) {
+  if (!game || game.mode !== 'duel' || !e || e.kind !== 'fighter' || e.dead) return '';
+  if (fighters.length < 2) return '';
+  const me = myFighter();
+  if (!me) return '';
+  return e.team === me.team ? '아군' : '상대';
+}
+function drawTeamTag(e, cam) {
+  const word = teamWord(e);
+  if (!word) return;
+  const head = w2s(CXx(e), e.y + e.h, cam);
+  const ally = word === '아군';
+  const col = ally ? '#eceae4' : '#e23b3b';
+  text(word, head.x, head.y - 18, 12, col, 'center');
+  ctx.fillStyle = col;
+  ctx.fillRect(head.x - 9, head.y - 4, 18, 2);
+}
 function myFighter() {
   if (net.role) {
     const owned = fighters.find(f => f.owner === myId);
@@ -1593,6 +1611,10 @@ function drawHUD(cam) {
   const foes = fighters.filter(f => !me || f.team !== me.team);
   allies.sort((a, b) => (a === me ? -1 : 0) - (b === me ? -1 : 0));
   const paintSide = (list, side) => {
+    if (list.length && fighters.length > 1) {
+      const ally = me && list[0].team === me.team;
+      text(ally ? '아군' : '상대', side === 'left' ? 36 : W - 36, 0, 12, ally ? '#8d8a82' : '#e23b3b', side === 'left' ? 'left' : 'right');
+    }
     let dy = 0;
     list.forEach(e => {
       const keys = plateKeys(e);
