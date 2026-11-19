@@ -1,0 +1,1692 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>그라운드</title>
+<style>
+  html,body{margin:0;height:100%;background:#6ea0e8;overflow:hidden;font-family:"Malgun Gothic","Apple SD Gothic Neo",sans-serif}
+  canvas{display:block;width:100%;height:100%;cursor:crosshair}
+  #nm{position:fixed;z-index:4;left:50%;top:14px;transform:translateX(-50%);display:none;
+    width:168px;text-align:center;font:800 16px "Malgun Gothic",sans-serif;color:#1a1208;
+    background:#fff6dc;border:3px solid #1a1208;padding:7px 10px;outline:none}
+</style>
+</head>
+<body>
+<input id="nm" maxlength="12" autocomplete="off" spellcheck="false" placeholder="이름">
+<canvas id="c"></canvas>
+<script>
+(() => {
+'use strict';
+const DB = 'https://ground-81292-default-rtdb.asia-southeast1.firebasedatabase.app';
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const nameEl = document.getElementById('nm');
+ctx.imageSmoothingEnabled = false;
+
+const HEART = [
+  '..KK..KK.',
+  '.KWRRKDK.',
+  'KWRRRRDDK',
+  'KRRRRRDDK',
+  'KRRRRRRDK',
+  '.KRRRRRK.',
+  '..KRRRK..',
+  '...KRK...',
+  '....K....'
+];
+
+const CHARS = [
+  {id:'charger', name:'차져', color:'#ff8a2a', tip:'좌클릭 홀드 대시 · 벽+방향+점프 벽차기'},
+  {id:'chainer', name:'체이너', color:'#3ec6ff', tip:'좌클릭 사슬 · 홀드 장판 · 우클릭 끌어오기'},
+  {id:'shifter', name:'쉬프터', color:'#b388ff', tip:'분신 공전 · 좌홀드 교대 · 우홀드 원혼'},
+  {id:'howler', name:'할로워', color:'#ff5ad1', tip:'좌클릭 홀드 후 비명'},
+  {id:'graviter', name:'그래비터', color:'#6d7cff', tip:'좌클릭 중력탄 · 우클릭 사각 폭발'},
+  {id:'connector', name:'커넥터', color:'#ffe14a', tip:'좌클릭 표창 3 · 우클릭 순간이동'},
+  {id:'exploder', name:'익스플러', color:'#ff4b4b', tip:'좌클릭 소폭발 · 우클릭 1초 대폭발'},
+  {id:'explorer', name:'익스플로러', color:'#3dff9a', tip:'좌홀드 가속 · 우클릭 곡사 활'},
+  {id:'spinner', name:'스피너', color:'#f4f4f4', tip:'좌홀드 회전베기 · 우클릭 짧은 이동'}
+];
+const CHAR = Object.fromEntries(CHARS.map(c => [c.id, c]));
+
+const BW = 46, BH = 14;
+const SOLIDS = [
+  {x:14.5, y:1, w:1.15, h:4.3},
+  {x:30.3, y:1, w:1.15, h:5.1}
+];
+const PLATS = [
+  {x:2.2, y:3.5, w:7.4},
+  {x:11.0, y:5.7, w:6.2},
+  {x:18.6, y:4.15, w:8.2},
+  {x:28.2, y:6.55, w:6.4},
+  {x:36.0, y:3.7, w:7.6},
+  {x:6.8, y:8.5, w:5.4},
+  {x:20.2, y:9.35, w:8.6},
+  {x:33.0, y:8.15, w:5.8}
+];
+const ORBS = [
+  {x:6.0, y:4.45}, {x:22.6, y:5.15}, {x:39.6, y:4.65}, {x:24.4, y:10.35}
+];
+
+let W = 800, H = 600, dpr = 1;
+let fighters = [], mobs = [], bosses = [], projs = [], zones = [], fx = [], nums = [];
+let game = null, T = 0, NID = 1, shake = 0;
+const keys = {}, prevK = {};
+const mouse = {x:0, y:0, l:false, r:false};
+const pointer = {x:0, y:0, click:null};
+let hits = [];
+let myId = localStorage.getItem('ground-id');
+if (!myId) { myId = Math.random().toString(36).slice(2, 10); localStorage.setItem('ground-id', myId); }
+let progress = {slime:1, knight:1, slimeBoss:false, knightBoss:false};
+try { progress = Object.assign(progress, JSON.parse(localStorage.getItem('ground-save') || '{}')); } catch (e) {}
+
+const S = {screen:'title', code:'', me:'charger', foe:'spinner', coop:false, which:'slime', pause:false, pickTitle:'', pickCb:null};
+const fb = {state:'unknown', msg:''};
+const net = {role:null, code:'', room:null, busy:false, acc:0, inAcc:0, myTeam:0, viewFresh:false};
+
+nameEl.value = localStorage.getItem('ground-name') || '플레이어';
+function myName() {
+  const v = (nameEl.value || '').trim().slice(0, 12) || '플레이어';
+  localStorage.setItem('ground-name', v);
+  return v;
+}
+function saveProgress() { localStorage.setItem('ground-save', JSON.stringify(progress)); }
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+function charOf(id) { return CHAR[id] || CHARS[0]; }
+
+function resize() {
+  dpr = Math.min(devicePixelRatio || 1, 2);
+  W = innerWidth; H = innerHeight;
+  canvas.width = Math.floor(W * dpr); canvas.height = Math.floor(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+}
+addEventListener('resize', resize); resize();
+
+function screenPos(e) {
+  const r = canvas.getBoundingClientRect();
+  return {x:e.clientX - r.left, y:e.clientY - r.top};
+}
+function combatMouse() { return S.screen === 'battle' && !S.pause && game && !game.over; }
+canvas.addEventListener('pointermove', e => {
+  const p = screenPos(e); pointer.x = p.x; pointer.y = p.y; mouse.x = p.x; mouse.y = p.y;
+});
+canvas.addEventListener('pointerdown', e => {
+  const p = screenPos(e); pointer.x = p.x; pointer.y = p.y; mouse.x = p.x; mouse.y = p.y;
+  if (combatMouse()) {
+    if (e.button === 0) mouse.l = true;
+    if (e.button === 2) mouse.r = true;
+  } else if (e.button === 0) pointer.click = p;
+});
+addEventListener('pointerup', e => {
+  if (e.button === 0) mouse.l = false;
+  if (e.button === 2) mouse.r = false;
+});
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+  if (e.code === 'Escape' && S.screen === 'battle') S.pause = !S.pause;
+  if (S.screen === 'join' && document.activeElement !== nameEl) {
+    if (e.code === 'Backspace') S.code = S.code.slice(0, -1);
+    else if (e.code === 'Enter' && S.code.length === 4) tryJoin();
+    else if (/^[a-zA-Z0-9]$/.test(e.key) && S.code.length < 4 && !e.repeat) S.code += e.key.toUpperCase();
+  }
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+addEventListener('pagehide', () => {
+  fetch(DB + '/queue/' + myId + '.json', {method:'DELETE', keepalive:true}).catch(() => {});
+});
+
+function button(x, y, w, h, label, fn, opt = {}) {
+  const hot = pointer.x >= x && pointer.x <= x + w && pointer.y >= y && pointer.y <= y + h;
+  ctx.fillStyle = opt.off ? '#2a241c' : opt.on ? '#ffe14a' : hot ? '#31405c' : '#172033';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = opt.off ? '#5a5044' : '#111';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(x + 1.5, y + 1.5, w - 3, h - 3);
+  ctx.fillStyle = opt.on ? '#1a1208' : opt.off ? '#8a8074' : '#fff';
+  ctx.font = `800 ${opt.fs || 18}px Malgun Gothic, sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(label, x + w / 2, y + h / 2 + 1);
+  if (!opt.off) hits.push({x, y, w, h, fn});
+}
+function uiClick() {
+  if (!pointer.click) return;
+  const c = pointer.click; pointer.click = null;
+  for (const h of hits) if (c.x >= h.x && c.x <= h.x + h.w && c.y >= h.y && c.y <= h.y + h.h) { h.fn(); return; }
+}
+function text(s, x, y, size, color, align) {
+  ctx.fillStyle = color || '#fff';
+  ctx.font = `800 ${size || 18}px Malgun Gothic, sans-serif`;
+  ctx.textAlign = align || 'left'; ctx.textBaseline = 'top';
+  ctx.fillText(s, x, y);
+}
+
+function blitHeart(x, y, scale, fill, palette) {
+  x = Math.round(x); y = Math.round(y);
+  for (let py = 0; py < 9; py++) {
+    for (let px = 0; px < 9; px++) {
+      const c = HEART[py][px];
+      if (c === '.') continue;
+      const empty = fill <= 0 || (fill < 1 && px >= 5);
+      let col = '#000';
+      if (c !== 'K') {
+        if (empty) col = '#2a2a2a';
+        else if (palette === 'gold') col = c === 'W' ? '#fff6cc' : c === 'D' ? '#c88810' : '#ffe14a';
+        else col = c === 'W' ? '#ffffff' : c === 'D' ? '#9d0000' : '#ff1a1a';
+      }
+      ctx.fillStyle = col;
+      ctx.fillRect(x + px * scale, y + py * scale, scale, scale);
+    }
+  }
+}
+function heartStep(scale) { return 9 * scale + scale; }
+function drawHearts(x, y, hp, maxHp, bonus, scale) {
+  hp = Math.max(0, Math.round(hp || 0));
+  bonus = Math.max(0, Math.round(bonus || 0));
+  const slots = Math.ceil(maxHp / 2), step = heartStep(scale), rowH = 10 * scale;
+  for (let i = 0; i < slots; i++) {
+    const left = hp - i * 2;
+    const fill = left >= 2 ? 1 : left >= 1 ? 0.5 : 0;
+    blitHeart(x + (i % 10) * step, y + Math.floor(i / 10) * rowH, scale, fill, 'red');
+  }
+  const bslots = Math.ceil(bonus / 2);
+  const by = y + Math.ceil(slots / 10) * rowH + 2;
+  for (let i = 0; i < bslots; i++) {
+    const left = bonus - i * 2;
+    blitHeart(x + (i % 10) * step, by + Math.floor(i / 10) * rowH, scale, left >= 2 ? 1 : 0.5, 'gold');
+  }
+}
+function heartsWidth(slots, scale) {
+  return Math.min(10, slots) * heartStep(scale) - scale;
+}
+
+function makeFighter(char, x, team, name) {
+  return {
+    id:++NID, kind:'fighter', char, team, name, x, y:1, w:0.72, h:1.55,
+    vx:0, vy:0, hp:20, maxHp:20, bonus:0, facing:team === 0 ? 1 : -1,
+    onGround:true, jumps:0, wall:0, lastCombat:-9, haste:0, slowA:0, dmgCutT:0,
+    flash:0, iframe:0, dead:false, cd:{l:0, r:0, ch:0},
+    holdL:0, holdR:0, spinT:0, spinTick:0, anchored:null, chanT:0, auraTick:0,
+    cloneA:Math.random() * 6, clones:1, soulLeft:0, soulT:0, boosting:false, boostT:0,
+    dashT:0, dashVx:0, dashVy:0, dashId:0, wk:0, pullT:0, jumpCd:0, reg:0,
+    _pl:false, _pr:false, _pj:false, mem:{}
+  };
+}
+function makeMob(sub, x, y, tint) {
+  const pint = sub === 'pint';
+  return {
+    id:++NID, kind:'mob', sub, tint:tint || null, team:2, x, y,
+    w:pint ? 0.68 : sub === 'rusher' ? 0.96 : 0.7,
+    h:pint ? 0.68 : sub === 'rusher' ? 1.32 : 1.62,
+    vx:0, vy:0, hp:pint ? 5 : 10, maxHp:pint ? 5 : 10, bonus:0,
+    facing:-1, onGround:false, wall:0, dead:false, flash:0, iframe:0,
+    cd:0, fused:0, exploded:false, counted:false, lastSrc:null, dashT:0, pullT:0, jumps:0
+  };
+}
+function makeBoss(which) {
+  const slime = which === 'slime';
+  return {
+    id:++NID, kind:'boss', sub:which, team:2, name:slime ? '대왕 슬라임' : '흑기사장',
+    x:BW / 2 - 1.2, y:1, w:slime ? 2.55 : 1.2, h:slime ? 2.05 : 2.4,
+    vx:0, vy:0, hp:40, maxHp:40, bonus:0, facing:-1, onGround:true, wall:0,
+    dead:false, flash:0, iframe:0, cd:0, act:null, actT:0, hid:0, chargeLeft:0,
+    dashT:0, pullT:0, jumps:0, lastSrc:null
+  };
+}
+
+function inSolid(x, y, w, h) {
+  if (x < 0 || x + w > BW || y < 1) return true;
+  return SOLIDS.some(s => x < s.x + s.w && x + w > s.x && y < s.y + s.h && y + h > s.y);
+}
+function pointSolid(x, y) {
+  if (x < 0 || x > BW || y < 1) return true;
+  return SOLIDS.some(s => x > s.x && x < s.x + s.w && y > s.y && y < s.y + s.h);
+}
+function rayEnd(x, y, dx, dy, max) {
+  const len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len;
+  for (let d = 0.2; d <= max; d += 0.2) {
+    if (pointSolid(x + ux * d, y + uy * d)) return {x:x + ux * (d - 0.2), y:y + uy * (d - 0.2), hit:true};
+  }
+  return {x:x + ux * max, y:y + uy * max, hit:false};
+}
+function CXx(e) { return e.x + e.w / 2; }
+function CYy(e) { return e.y + e.h * 0.45; }
+function distC(a, b) { return Math.hypot(CXx(a) - CXx(b), CYy(a) - CYy(b)); }
+function bodies() { return [...fighters, ...mobs, ...bosses]; }
+function enemiesOf(e) { return bodies().filter(o => o !== e && !o.dead && o.team !== e.team); }
+function nearestEnemy(e) {
+  let b = null, bd = 1e9;
+  for (const o of enemiesOf(e)) { const d = distC(e, o); if (d < bd) { bd = d; b = o; } }
+  return b;
+}
+function nearestTo(x, y, team) {
+  let b = null, bd = 1e9;
+  for (const o of bodies()) {
+    if (o.dead || o.team === team) continue;
+    const d = Math.hypot(CXx(o) - x, CYy(o) - y);
+    if (d < bd) { bd = d; b = o; }
+  }
+  return b;
+}
+function byId(id) { return bodies().find(e => e.id === id) || null; }
+
+function hurt(t, amount, opt = {}) {
+  if (!t || t.dead || amount <= 0) return false;
+  if (opt.hid) {
+    t._hits = t._hits || {};
+    if (t._hits[opt.hid]) return false;
+    t._hits[opt.hid] = 1;
+  }
+  if (t.iframe > 0 && !opt.dot) return false;
+  let dmg = amount;
+  if (t.dmgCutT > 0) dmg = Math.max(0, dmg - 3);
+  if (dmg <= 0) return false;
+  if (t.bonus > 0) {
+    const u = Math.min(t.bonus, dmg);
+    t.bonus -= u; dmg -= u;
+  }
+  t.hp -= dmg;
+  t.lastCombat = T;
+  if (opt.src && opt.src.lastCombat !== undefined) opt.src.lastCombat = T;
+  t.flash = 0.14;
+  if (!opt.dot) t.iframe = t.kind === 'fighter' ? 0.26 : 0.06;
+  if (opt.kb && opt.src) {
+    const dir = Math.sign(CXx(t) - CXx(opt.src)) || 1;
+    t.vx += dir * opt.kb;
+    t.vy += opt.kby || 3;
+  }
+  if (opt.src) t.lastSrc = opt.src;
+  nums.push({x:CXx(t), y:t.y + t.h + 0.2, vy:2.2, life:0.7, text:String(amount), color:opt.dot ? '#ffd0d0' : '#fff'});
+  if (t.kind === 'fighter') shake = Math.min(10, shake + Math.min(6, amount));
+  if (t.hp <= 0) kill(t);
+  return true;
+}
+function kill(t) {
+  t.dead = true; t.hp = 0; t.vx = 0;
+  fx.push({x:CXx(t), y:CYy(t), r:t.kind === 'boss' ? 2.2 : 0.8, life:0.28, max:0.28, color:t.kind === 'boss' ? '#b6ff57' : '#fff'});
+  if (t.kind === 'mob') {
+    if (game && game.mode === 'raid' && !t.counted) { t.counted = true; game.killed++; }
+    const src = t.lastSrc;
+    if (src && src.kind === 'fighter' && game && game.rules && game.rules.rewards && !t.exploded) {
+      src.hp = Math.min(src.maxHp, src.hp + 3);
+      src.bonus = Math.min(12, (src.bonus || 0) + 4);
+      src.haste = Math.max(src.haste || 0, 5);
+      nums.push({x:CXx(src), y:src.y + src.h + 0.6, vy:1.4, life:0.9, text:'+3  ♥+4', color:'#ffe14a'});
+    }
+  }
+}
+function markAttack(e) { e.slowA = 0.4; e.lastCombat = T; }
+
+function moveBody(e, dt) {
+  const dash = e.dashT > 0;
+  if (dash) { e.dashT -= dt; e.vx = e.dashVx; e.vy = e.dashVy; }
+  else { e.vy -= 31 * dt; if (e.vy < -24) e.vy = -24; }
+  if (e.pullT > 0) {
+    e.pullT -= dt;
+    e.vx += (e.pullX - e.x) * Math.min(1, dt * 8);
+    e.vy += (e.pullY - e.y) * Math.min(1, dt * 8);
+  }
+  e.vx = clamp(e.vx, -22, 22);
+  e.vy = clamp(e.vy, -24, 18);
+  e.wall = 0;
+  const ox = e.x;
+  e.x += e.vx * dt;
+  for (const s of SOLIDS) {
+    if (e.x < s.x + s.w && e.x + e.w > s.x && e.y < s.y + s.h && e.y + e.h > s.y + 0.02) {
+      if (ox + e.w <= s.x + 0.04) { e.x = s.x - e.w; e.wall = 1; }
+      else if (ox >= s.x + s.w - 0.04) { e.x = s.x + s.w; e.wall = -1; }
+      else e.x = ox;
+      e.vx = 0;
+      if (e.dashT > 0) e.dashT = 0;
+    }
+  }
+  if (e.x < 0) { e.x = 0; e.vx = 0; e.wall = -1; e.dashT = 0; }
+  if (e.x + e.w > BW) { e.x = BW - e.w; e.vx = 0; e.wall = 1; e.dashT = 0; }
+  const oy = e.y;
+  e.y += e.vy * dt;
+  let grounded = false;
+  if (e.y < 1) { e.y = 1; e.vy = 0; grounded = true; }
+  if (e.vy <= 0) {
+    for (const p of PLATS) {
+      if (e.x + e.w > p.x + 0.08 && e.x < p.x + p.w - 0.08 && oy >= p.y - 0.02 && e.y <= p.y && oy - e.y < 1.6) {
+        e.y = p.y; e.vy = 0; grounded = true;
+      }
+    }
+  }
+  if (grounded) { e.onGround = true; e.jumps = 0; }
+  else {
+    if (e.onGround) e.jumps = Math.max(e.jumps, 1);
+    e.onGround = false;
+  }
+}
+
+function onOrb(e) {
+  return ORBS.some(o => Math.hypot(o.x - CXx(e), o.y - (e.y + 0.3)) < 0.85);
+}
+function speedMul(e) {
+  let m = 1;
+  const charging = e.char !== 'explorer' && (e.holdL > 0.06 || e.holdR > 0.06 || e.anchored || e.spinT > 0);
+  if (charging) m *= 0.9;
+  if (e.slowA > 0) m *= 0.95;
+  if (e.haste > 0) m *= 1.5;
+  if (e.boosting) m *= 1.5;
+  return m;
+}
+function spawnProj(p) { p.id = ++NID; p.hit = {}; p.life = p.life ?? 2; projs.push(p); return p; }
+function dashHit(e) {
+  if (!(e.dashT > 0) && e._dashHitLeft) return;
+  if (e.dashT > 0) e._dashHitLeft = true;
+  if (!e._dashHitLeft) return;
+  if (e.dashT <= 0) e._dashHitLeft = false;
+  if (!(e.dashDmg > 0)) return;
+  for (const o of enemiesOf(e)) {
+    if (Math.abs(CXx(o) - CXx(e)) < (o.w + e.w) * 0.55 + 0.15 && Math.abs(CYy(o) - CYy(e)) < 1.1) {
+      hurt(o, e.dashDmg, {src:e, hid:'d' + e.dashId, kb:7, kby:2});
+    }
+  }
+}
+
+function doDash(e, inp, holdTime) {
+  const gauge = clamp(holdTime / 1, 0.08, 1);
+  let dx = inp.aimX - CXx(e), dy = inp.aimY - (e.y + e.h * 0.55);
+  let len = Math.hypot(dx, dy);
+  if (len < 0.35) { dx = e.facing; dy = 0; len = 1; }
+  dx /= len; dy /= len;
+  const dist = 1.3 + gauge * 6.8, dur = 0.18;
+  e.dashT = dur; e.dashVx = dx * dist / dur; e.dashVy = dy * dist / dur;
+  e.dashId = ++NID; e.dashDmg = 5; e.cd.l = 0.5; e.dmgCutT = 1; e.holdL = 0;
+  e.facing = dx >= 0 ? 1 : -1;
+  markAttack(e);
+  fx.push({x:CXx(e), y:CYy(e), r:0.4, life:0.12, max:0.12, color:'#ffb15a'});
+}
+
+function clonePos(e, i) {
+  const n = e.clones || 1;
+  const a = (e.cloneA || 0) + (n === 1 ? 0 : i * Math.PI * 2 / n);
+  return {x:CXx(e) + Math.cos(a) * 2.15, y:e.y + 0.75 + Math.sin(a) * 1.15};
+}
+function blast(e, x, y, r, dmg, kb) {
+  fx.push({x, y, r, life:0.22, max:0.22, color:r > 2 ? '#ff5a2a' : '#ffd15a'});
+  const hid = 'b' + (++NID);
+  for (const o of enemiesOf(e)) {
+    if (Math.hypot(CXx(o) - x, CYy(o) - y) <= r + 0.25) hurt(o, dmg, {src:e, kb, hid});
+  }
+  if (r >= 3) shake = Math.min(12, shake + 7);
+}
+
+function updateSkill(e, inp, dt) {
+  const aim = Math.atan2(inp.aimY - (e.y + e.h * 0.55), inp.aimX - CXx(e));
+  if (e.char === 'charger') {
+    if (inp.lmb && e.cd.l <= 0) e.holdL += dt;
+    if (inp.lReleased) {
+      const t = e.holdL; e.holdL = 0;
+      if (t > 0.03 && e.cd.l <= 0) doDash(e, inp, t);
+    } else if (!inp.lmb) e.holdL = 0;
+    if (inp.jumpEdge && e.wall && ((e.wall > 0 && inp.right) || (e.wall < 0 && inp.left)) && e.wk <= 0) {
+      const dir = -e.wall;
+      e.dashT = 0.15; e.dashVx = dir * 15; e.dashVy = 5.2; e.dashId = ++NID; e.dashDmg = 5; e.wk = 0.45;
+      e.facing = dir;
+      markAttack(e);
+      return 'kicked';
+    }
+  } else if (e.char === 'chainer') {
+    if (e.anchored) {
+      e.chanT += dt; e.holdL += dt; e.auraTick += dt;
+      if (e.auraTick >= 0.2) {
+        e.auraTick = 0;
+        for (const o of enemiesOf(e)) {
+          if (Math.hypot(CXx(o) - e.anchored.x, CYy(o) - e.anchored.y) <= 1.15) hurt(o, 1, {src:e, dot:true});
+        }
+      }
+      if (e.chanT >= 3 || inp.lReleased) { e.anchored = null; e.cd.ch = 2; e.holdL = 0; e.chanT = 0; }
+    } else if (inp.lmb && e.cd.ch <= 0) {
+      e.holdL += dt;
+      if (e.holdL > 0.18) {
+        const end = rayEnd(CXx(e), e.y + 0.9, inp.aimX - CXx(e), inp.aimY - (e.y + 0.9), 7);
+        e.anchored = {x:end.x, y:end.y}; e.chanT = 0; e.auraTick = 0;
+      }
+    }
+    if (inp.lReleased && !e.anchored) {
+      const t = e.holdL; e.holdL = 0;
+      if (t > 0 && t <= 0.18 && e.cd.l <= 0) {
+        const dx = Math.cos(aim), dy = Math.sin(aim);
+        spawnProj({type:'chain', x:CXx(e), y:e.y + 0.9, vx:dx * 22, vy:dy * 22, r:0.18, dmg:5, life:0.45, team:e.team, owner:e.id, maxD:7, trav:0});
+        e.cd.l = 0.5; markAttack(e);
+      }
+    } else if (!inp.lmb && !e.anchored) e.holdL = 0;
+    if (inp.rPressed && e.cd.r <= 0) {
+      const dx = Math.cos(aim), dy = Math.sin(aim);
+      spawnProj({type:'pull', x:CXx(e), y:e.y + 0.9, vx:dx * 22, vy:dy * 22, r:0.18, dmg:0, life:0.45, team:e.team, owner:e.id, maxD:7, trav:0});
+      e.cd.r = 1; markAttack(e);
+    }
+  } else if (e.char === 'shifter') {
+    e.cloneA += dt * 2.4;
+    if (e.cd.l <= 0 && inp.lmb) {
+      e.holdL += dt;
+      if (e.holdL >= 2) {
+        let best = 0, bd = 1e9;
+        const n = e.clones || 1;
+        for (let i = 0; i < n; i++) {
+          const p = clonePos(e, i);
+          const d = Math.hypot(p.x - inp.aimX, p.y - inp.aimY);
+          if (d < bd) { bd = d; best = i; }
+        }
+        const p = clonePos(e, best);
+        e.x = p.x - e.w / 2; e.y = Math.max(1, p.y - 0.4);
+        e.hp = Math.min(e.maxHp, e.hp + 3);
+        e.cd.l = 3; e.holdL = 0;
+      }
+    } else if (!inp.lmb) e.holdL = 0;
+    if (e.soulLeft <= 0 && e.cd.r <= 0 && inp.rmb) {
+      e.holdR += dt;
+      if (e.holdR >= 2) { e.clones = 6; e.soulLeft = 6; e.soulT = 0; e.cd.r = 12; e.holdR = 0; markAttack(e); }
+    } else if (!inp.rmb) e.holdR = 0;
+    if (e.soulLeft > 0) {
+      e.soulT += dt; e.soulLeft -= dt;
+      if (e.soulT >= 0.5) {
+        e.soulT -= 0.5;
+        for (let i = 0; i < 6; i++) {
+          const p = clonePos(e, i);
+          const t = nearestTo(p.x, p.y, e.team);
+          let dx = e.facing, dy = 0;
+          if (t) { dx = CXx(t) - p.x; dy = CYy(t) - p.y; }
+          const len = Math.hypot(dx, dy) || 1;
+          spawnProj({type:'soul', x:p.x, y:p.y, vx:dx / len * 7.2, vy:dy / len * 7.2, r:0.16, dmg:1, life:2.3, team:e.team, owner:e.id, pierce:true, homing:1.5, grav:0});
+        }
+      }
+      if (e.soulLeft <= 0) { e.clones = 1; e.soulLeft = 0; }
+    }
+  } else if (e.char === 'howler') {
+    if (inp.lmb && e.cd.l <= 0) e.holdL = Math.min(3, e.holdL + dt);
+    if (inp.lReleased) {
+      const g = clamp(e.holdL / 3, 0, 1); e.holdL = 0;
+      if (g > 0.05 && e.cd.l <= 0) {
+        const dx = Math.cos(aim), dy = Math.sin(aim);
+        const dmg = Math.max(1, Math.round(8 * g)), reach = 2 + 7 * g;
+        const hid = 'h' + (++NID);
+        for (const o of enemiesOf(e)) {
+          const ox = CXx(o) - CXx(e), oy = CYy(o) - (e.y + 0.8);
+          const d = Math.hypot(ox, oy);
+          if (d > reach || d < 0.1) continue;
+          const diff = Math.atan2(Math.sin(Math.atan2(oy, ox) - aim), Math.cos(Math.atan2(oy, ox) - aim));
+          if (Math.abs(diff) < 0.48) hurt(o, dmg, {src:e, hid, kb:4 + g * 6});
+        }
+        fx.push({x:CXx(e), y:e.y + 0.9, r:reach, life:0.22, max:0.22, color:'#ff7ad8', cone:aim, span:0.48});
+        e.cd.l = 2; markAttack(e);
+      }
+    } else if (!inp.lmb) e.holdL = 0;
+  } else if (e.char === 'graviter') {
+    if (inp.lPressed && e.cd.l <= 0) {
+      const dx = Math.cos(aim), dy = Math.sin(aim);
+      spawnProj({type:'grenade', x:CXx(e) + dx * 0.4, y:e.y + 1, vx:dx * 9.5, vy:dy * 9.5 + 2, r:0.28, dmg:2, life:2, fuse:2, team:e.team, owner:e.id, grav:34});
+      e.cd.l = 0.5; markAttack(e);
+    }
+    if (inp.rPressed && e.cd.r <= 0) {
+      const dx = Math.cos(aim), dy = Math.sin(aim);
+      spawnProj({type:'square', x:CXx(e) + dx * 0.5, y:e.y + 0.9, vx:dx * 15, vy:dy * 15, r:0.24, dmg:5, life:1.6, team:e.team, owner:e.id, grav:8, safe:0.08});
+      e.cd.r = 1; markAttack(e);
+    }
+  } else if (e.char === 'connector') {
+    if (inp.lPressed && e.cd.l <= 0) {
+      for (const a of [-0.2, 0, 0.2]) {
+        spawnProj({type:'star', x:CXx(e), y:e.y + 0.85, vx:Math.cos(aim + a) * 16, vy:Math.sin(aim + a) * 16, r:0.15, dmg:2, life:0.75, team:e.team, owner:e.id, grav:0});
+      }
+      e.cd.l = 0.3; markAttack(e);
+    }
+    if (inp.rPressed && e.cd.r <= 0) {
+      const end = rayEnd(CXx(e), e.y + 0.8, inp.aimX - CXx(e), inp.aimY - (e.y + 0.8), 5);
+      const nx = end.x - e.w / 2, ny = Math.max(1, end.y - e.h * 0.3);
+      if (!inSolid(nx, ny, e.w, e.h)) { e.x = nx; e.y = ny; e.vy = 0; }
+      e.cd.r = 3; markAttack(e);
+    }
+  } else if (e.char === 'exploder') {
+    if (inp.lPressed && e.cd.l <= 0) {
+      const dx = Math.cos(aim), dy = Math.sin(aim);
+      blast(e, CXx(e) + dx, (e.y + 0.7) + dy * 0.3, 1, 2, 3);
+      e.cd.l = 0.25; markAttack(e);
+    }
+    if (e.cd.r <= 0 && inp.rmb) {
+      e.holdR += dt;
+      if (e.holdR >= 1) { blast(e, CXx(e), e.y + 0.7, 4, 6, 13); e.cd.r = 4; e.holdR = 0; markAttack(e); }
+    } else if (!inp.rmb) e.holdR = 0;
+  } else if (e.char === 'explorer') {
+    if (inp.lmb && e.boostT < 3 && (e.boosting || e.cd.l <= 0)) {
+      e.boosting = true; e.boostT += dt;
+      if (e.boostT >= 3) { e.boosting = false; e.boostT = 0; e.cd.l = 3; }
+    } else if (e.boosting && !inp.lmb) { e.boosting = false; e.boostT = 0; e.cd.l = 3; }
+    if (inp.rPressed && e.cd.r <= 0) {
+      spawnProj({type:'arrow', x:CXx(e), y:e.y + 0.95, vx:Math.cos(aim) * 13, vy:Math.sin(aim) * 13, r:0.14, dmg:4, life:1.5, team:e.team, owner:e.id, grav:46});
+      e.cd.r = 0.5; markAttack(e);
+    }
+  } else if (e.char === 'spinner') {
+    if (e.cd.l <= 0 && inp.lmb && e.spinT < 4) {
+      e.spinT += dt; e.holdL = e.spinT; e.spinTick += dt;
+      if (e.spinTick >= 0.5) {
+        e.spinTick -= 0.5;
+        for (const o of enemiesOf(e)) if (distC(e, o) <= 2.15) hurt(o, 3, {src:e, dot:true, kb:2});
+        markAttack(e);
+        fx.push({x:CXx(e), y:CYy(e), r:2, life:0.12, max:0.12, color:'#ffffff'});
+      }
+      if (e.spinT >= 4) { e.cd.l = 0.8; e.spinT = 0; e.spinTick = 0; e.holdL = 0; }
+    } else if (!inp.lmb) {
+      if (e.spinT > 0) e.cd.l = 0.8;
+      e.spinT = 0; e.spinTick = 0; e.holdL = 0;
+    }
+    if (inp.rPressed && e.cd.r <= 0) {
+      let dx = inp.aimX - CXx(e), dy = inp.aimY - e.y;
+      const d = Math.hypot(dx, dy) || 1;
+      if (d > 3) { dx *= 3 / d; dy *= 3 / d; }
+      const nx = e.x + dx, ny = Math.max(1, e.y + dy);
+      if (!inSolid(nx, ny, e.w, e.h)) { e.x = nx; e.y = ny; e.vy = 0; }
+      e.cd.r = 0.3;
+    }
+  }
+  return '';
+}
+
+function finalizeInp(e, inp) {
+  inp.lPressed = !!inp.lmb && !e._pl;
+  inp.lReleased = !inp.lmb && !!e._pl;
+  inp.rPressed = !!inp.rmb && !e._pr;
+  inp.rReleased = !inp.rmb && !!e._pr;
+  inp.jumpEdge = !!inp.jump && !e._pj;
+  e._pl = !!inp.lmb; e._pr = !!inp.rmb; e._pj = !!inp.jump;
+  return inp;
+}
+function blankInp(e) {
+  return finalizeInp(e, {left:false, right:false, jump:false, lmb:false, rmb:false, aimX:e.x + e.facing * 3, aimY:e.y + 1});
+}
+function humanInp(e, who, cam) {
+  const inp = {left:false, right:false, jump:false, lmb:false, rmb:false, aimX:e.x + 2, aimY:e.y + 1};
+  if (who === 'p1') {
+    inp.left = !!keys.KeyA; inp.right = !!keys.KeyD; inp.jump = !!keys.Space;
+    inp.lmb = mouse.l; inp.rmb = mouse.r;
+    const w = s2w(mouse.x, mouse.y, cam);
+    inp.aimX = w.x; inp.aimY = w.y;
+  } else {
+    inp.left = !!keys.ArrowLeft; inp.right = !!keys.ArrowRight; inp.jump = !!keys.ArrowUp;
+    inp.lmb = !!keys.KeyK; inp.rmb = !!keys.KeyL;
+    const t = nearestEnemy(e);
+    inp.aimX = t ? CXx(t) : e.x + e.facing * 3;
+    inp.aimY = t ? CYy(t) : e.y + 1;
+  }
+  return finalizeInp(e, inp);
+}
+function aiInp(e) {
+  const inp = {left:false, right:false, jump:false, lmb:false, rmb:false, aimX:e.x + e.facing * 3, aimY:e.y + 1};
+  const t = nearestEnemy(e);
+  if (!t) return finalizeInp(e, inp);
+  const dx = CXx(t) - CXx(e), dy = CYy(t) - CYy(e), dist = Math.hypot(dx, dy) || 1;
+  inp.aimX = CXx(t); inp.aimY = CYy(t);
+  const toward = () => { if (dx > 0.35) inp.right = true; else if (dx < -0.35) inp.left = true; };
+  const away = () => { if (dx > 0) inp.left = true; else inp.right = true; };
+  const mem = e.mem;
+  if ((t.y > e.y + 1.35 || (e.wall && dist < 6)) && e.jumpCd <= 0 && (e.onGround || e.jumps < 2)) {
+    inp.jump = true; e.jumpCd = 0.42;
+  }
+  if (e.char === 'charger') {
+    if (dist > 2.4) toward(); else away();
+    if (e.cd.l <= 0 && dist < 10) inp.lmb = (e.holdL || 0) < 0.9;
+  } else if (e.char === 'chainer') {
+    if (dist > 5.5) toward(); else if (dist < 2.4) away();
+    if (dist < 8 && e.cd.l <= 0 && !e.anchored && (mem.hold || 0) <= 0) inp.lmb = !e._pl;
+    if (dist < 6 && dist > 2 && e.cd.ch <= 0 && Math.sin(T * 0.7 + e.id) > 0.35) { inp.lmb = true; mem.hold = 1; }
+    if (e.anchored && e.chanT > 1.3) inp.lmb = false;
+    if (dist > 2.5 && dist < 8 && e.cd.r <= 0 && !e._pr && Math.sin(T + e.id) > 0.82) inp.rmb = true;
+  } else if (e.char === 'shifter') {
+    toward();
+    if (e.cd.l <= 0 && dist < 7) inp.lmb = true;
+    if (e.hp < 14 && e.cd.r <= 0 && e.soulLeft <= 0) inp.rmb = true;
+  } else if (e.char === 'howler') {
+    if (dist < 4) away(); else if (dist > 7) toward();
+    if (e.cd.l <= 0 && dist < 11) inp.lmb = (e.holdL || 0) < 1.7;
+  } else if (e.char === 'graviter') {
+    if (dist > 6) toward(); else if (dist < 2.5) away();
+    if (e.cd.l <= 0 && dist < 12 && !e._pl) inp.lmb = true;
+    if (e.cd.r <= 0 && dist < 7 && !e._pr) inp.rmb = true;
+  } else if (e.char === 'connector') {
+    if (dist > 4) toward(); else if (dist < 2) away();
+    if (e.cd.l <= 0 && dist < 9 && !e._pl) inp.lmb = true;
+    if (e.cd.r <= 0 && (dist > 6.5 || dist < 1.6) && !e._pr) inp.rmb = true;
+  } else if (e.char === 'exploder') {
+    if (dist > 1.6) toward();
+    if (e.cd.l <= 0 && dist < 2.3 && !e._pl) inp.lmb = true;
+    if ((e.cd.r <= 0 || e.holdR > 0) && dist < 3.6) inp.rmb = e.holdR < 1;
+  } else if (e.char === 'explorer') {
+    if (dist > 3) toward();
+    if ((e.cd.l <= 0 || e.boosting) && dist > 3.5 && e.boostT < 3) inp.lmb = true;
+    if (e.cd.r <= 0 && dist < 12 && !e._pr) inp.rmb = true;
+  } else if (e.char === 'spinner') {
+    if (dist > 1.8) toward();
+    if (dist < 2.3 && (e.cd.l <= 0 || e.spinT > 0)) inp.lmb = e.spinT < 3.2;
+    if (e.cd.r <= 0 && dist > 2.5 && dist < 3.3 && !e._pr) inp.rmb = true;
+  }
+  return finalizeInp(e, inp);
+}
+
+function updateFighter(e, inp, dt) {
+  if (e.dead) { e.vx *= 0.8; moveBody(e, dt); return; }
+  for (const k of ['l', 'r', 'ch']) e.cd[k] = Math.max(0, e.cd[k] - dt);
+  e.dmgCutT = Math.max(0, e.dmgCutT - dt);
+  e.iframe = Math.max(0, e.iframe - dt);
+  e.flash = Math.max(0, e.flash - dt);
+  e.slowA = Math.max(0, e.slowA - dt);
+  e.haste = Math.max(0, e.haste - dt);
+  e.wk = Math.max(0, e.wk - dt);
+  e.jumpCd = Math.max(0, (e.jumpCd || 0) - dt);
+    const kicked = updateSkill(e, inp, dt) === 'kicked';
+  e.aimX = inp.aimX; e.aimY = inp.aimY;
+  if (!e.dashT) {
+    const ad = inp.aimX - CXx(e);
+    if (Math.abs(ad) > 0.12) e.facing = ad > 0 ? 1 : -1;
+    const spd = 6.4 * speedMul(e);
+    const target = inp.left && !inp.right ? -spd : inp.right && !inp.left ? spd : 0;
+    e.vx += (target - e.vx) * Math.min(1, dt * 14);
+  }
+  if (!kicked && inp.jumpEdge && !e.dashT && (e.onGround || e.jumps < 2)) {
+    const orb = onOrb(e);
+    e.vy = orb ? 16.4 : 11.5;
+    e.jumps = e.onGround ? 1 : 2;
+    e.onGround = false;
+    if (orb) fx.push({x:CXx(e), y:e.y, r:0.7, life:0.2, max:0.2, color:'#ffe14a'});
+  }
+  moveBody(e, dt);
+  dashHit(e);
+  if (e.hp > 0 && e.hp < e.maxHp && T - e.lastCombat >= 3) {
+    e.reg += dt;
+    if (e.reg >= 0.6) { e.reg = 0; e.hp = Math.min(e.maxHp, e.hp + 1); }
+  }
+}
+
+function updateMob(m, dt) {
+  if (m.dead) { m.flash = Math.max(0, m.flash - dt); return; }
+  m.iframe = Math.max(0, m.iframe - dt);
+  m.flash = Math.max(0, m.flash - dt);
+  m.cd = Math.max(0, m.cd - dt);
+  const t = nearestEnemy(m);
+  let vx = 0;
+  if (t) {
+    const dx = CXx(t) - CXx(m), dist = distC(m, t);
+    const dir = Math.sign(dx) || 1;
+    m.facing = dir;
+    if (m.sub === 'launcher') {
+      if (dist <= 3) vx = -dir * 4.4;
+      else if (dist <= 7) {
+        vx = Math.abs(dist - 5) > 0.8 ? Math.sign(dist - 5) * dir * 1.6 : 0;
+        if (m.cd <= 0 && dist > 3) {
+          const ay = CYy(t) - (m.y + 1.1), ax = CXx(t) - CXx(m);
+          const len = Math.hypot(ax, ay) || 1;
+          spawnProj({type:'orb', x:CXx(m), y:m.y + 1.15, vx:ax / len * 8.5, vy:ay / len * 8.5, r:0.26, dmg:3, life:1.8, team:2, owner:m.id, grav:7});
+          m.cd = 1.15;
+        }
+      }
+    } else if (m.sub === 'rusher') {
+      if (dist <= 7) vx = dir * 4.6;
+      if (dist <= 3 && m.cd <= 0 && Math.abs(dx) < 2.3 && Math.abs(CYy(t) - CYy(m)) < 1.3) {
+        hurt(t, 2, {src:m, hid:'me' + m.id + ':' + Math.floor(T * 2), kb:6});
+        m.cd = 0.85;
+        fx.push({x:CXx(m) + m.facing * 0.8, y:m.y + 0.7, r:0.7, life:0.1, max:0.1, color:'#ff6a6a'});
+      }
+    } else if (m.sub === 'pint') {
+      if (dist <= 7 && m.fused <= 0) vx = dir * 4.2;
+      if (dist <= 1.05 && m.fused <= 0) m.fused = 0.32;
+    }
+    if (m.wall && t.y > m.y + 0.4) m.vy = 10;
+  }
+  if (m.fused > 0) {
+    m.fused -= dt; vx = 0;
+    if (m.fused <= 0) {
+      m.exploded = true;
+      fx.push({x:CXx(m), y:CYy(m), r:4, life:0.28, max:0.28, color:'#ff9a3a'});
+      shake = Math.min(12, shake + 8);
+      for (const o of bodies()) {
+        if (o === m || o.dead) continue;
+        if (distC(o, m) <= 4.2) hurt(o, 5, {src:m, kb:11, hid:'pint' + m.id});
+      }
+      kill(m);
+      return;
+    }
+  }
+  m.vx = vx;
+  moveBody(m, dt);
+}
+
+function updateBoss(b, dt) {
+  if (b.dead) return;
+  b.iframe = Math.max(0, b.iframe - dt);
+  b.flash = Math.max(0, b.flash - dt);
+  b.cd = Math.max(0, b.cd - dt);
+  const slime = b.sub === 'slime';
+  const t = nearestEnemy(b);
+  if (!t) { b.vx = 0; moveBody(b, dt); return; }
+  const dx = CXx(t) - CXx(b), dist = distC(b, t);
+  b.facing = Math.sign(dx) || b.facing;
+  if (b.actT > 0) {
+    b.actT -= dt;
+    if (b.act === 'swing') {
+      b.vx = 0;
+      if (b.actT < 0.38 && b.actT > 0.16) {
+        const hx = CXx(b) + b.facing * (slime ? 1.55 : 1.35);
+        const hy = b.y + (slime ? 1.1 : 1.3);
+        for (const f of enemiesOf(b)) {
+          if (Math.hypot(CXx(f) - hx, CYy(f) - hy) < (slime ? 1.25 : 1.15)) hurt(f, slime ? 4 : 5, {src:b, hid:b.hid, kb:7});
+        }
+      }
+    } else if (b.act === 'charge') {
+      const spd = (slime ? 2.5 : 3.3) * (slime ? 1.2 : 1.35);
+      b.vx = b.facing * spd;
+      b.chargeLeft -= spd * dt;
+      for (const f of enemiesOf(b)) {
+        if (Math.abs(CXx(f) - CXx(b)) < b.w * 0.7 && Math.abs(CYy(f) - CYy(b)) < 1.4) hurt(f, slime ? 5 : 4, {src:b, hid:b.hid, kb:9});
+      }
+      if (b.chargeLeft <= 0 || b.wall) b.actT = 0;
+    } else b.vx = 0;
+    if (b.actT <= 0) b.act = null;
+    moveBody(b, dt);
+    return;
+  }
+  b.vx = 0;
+  if (dist <= 3) { b.act = 'swing'; b.actT = slime ? 0.52 : 0.48; b.hid = 'sw' + (++NID); }
+  else if (dist <= 5) { b.act = 'charge'; b.actT = 1.1; b.chargeLeft = slime ? 3 : 4; b.hid = 'ch' + (++NID); }
+  else if (dist <= 7) {
+    if (b.cd <= 0) {
+      const ax = CXx(t) - CXx(b), ay = CYy(t) - (b.y + 1.2);
+      const len = Math.hypot(ax, ay) || 1;
+      if (slime) spawnProj({type:'goo', x:CXx(b) + b.facing * 0.8, y:b.y + 1.2, vx:ax / len * 11, vy:ay / len * 11, r:0.28, dmg:3, life:1.7, team:2, owner:b.id, pierce:true, grav:0});
+      else spawnProj({type:'sword', x:CXx(b) + b.facing * 0.7, y:b.y + 1.35, vx:ax / len * 12, vy:ay / len * 12, r:0.22, dmg:4, life:1.3, team:2, owner:b.id, grav:0});
+      b.cd = slime ? 0.5 : 0.7;
+      b.act = 'shoot'; b.actT = 0.28;
+    } else b.vx = Math.sign(dx) * (slime ? 1.6 : 2.2);
+  } else b.vx = Math.sign(dx) * (slime ? 2.3 : 3.1);
+  moveBody(b, dt);
+}
+
+function updateProj(p, dt) {
+  if (p.homing) {
+    const t = nearestTo(p.x, p.y, p.team);
+    if (t) {
+      const want = Math.atan2(CYy(t) - p.y, CXx(t) - p.x);
+      const cur = Math.atan2(p.vy, p.vx);
+      let d = Math.atan2(Math.sin(want - cur), Math.cos(want - cur));
+      d = clamp(d, -p.homing * dt, p.homing * dt);
+      const sp = Math.hypot(p.vx, p.vy) || 1;
+      p.vx = Math.cos(cur + d) * sp; p.vy = Math.sin(cur + d) * sp;
+    }
+  }
+  if (p.grav) p.vy -= p.grav * dt;
+  p.x += p.vx * dt; p.y += p.vy * dt;
+  p.life -= dt;
+  if (p.safe) p.safe -= dt;
+  if (p.maxD) { p.trav = (p.trav || 0) + Math.hypot(p.vx, p.vy) * dt; if (p.trav >= p.maxD) p.life = 0; }
+  const hitWall = !p.pierce && pointSolid(p.x, p.y);
+  if (p.type === 'grenade') {
+    if (p.y < 1) { p.y = 1; p.vy *= -0.35; p.vx *= 0.72; }
+    for (const pl of PLATS) {
+      if (p.vy < 0 && p.x > pl.x && p.x < pl.x + pl.w && p.y < pl.y && p.y > pl.y - 0.4) { p.y = pl.y; p.vy = 0; p.vx *= 0.6; }
+    }
+    p.fuse -= dt;
+    if (p.fuse <= 0) { explodeGrenade(p); p.life = 0; }
+    return;
+  }
+  if (hitWall) {
+    if (p.type === 'square') explodeSquare(p);
+    p.life = 0;
+    return;
+  }
+  if (p.safe > 0) return;
+  for (const o of bodies()) {
+    if (o.dead || o.id === p.owner || o.team === p.team) continue;
+    if (p.hit && p.hit[o.id]) continue;
+    if (Math.hypot(CXx(o) - p.x, CYy(o) - p.y) <= p.r + Math.max(o.w, o.h) * 0.35) {
+      if (p.type === 'square') { explodeSquare(p); p.life = 0; return; }
+      if (p.type === 'pull') {
+        const src = byId(p.owner);
+        if (src) { o.pullT = 0.28; o.pullX = src.x; o.pullY = src.y; }
+        p.life = 0; return;
+      }
+      hurt(o, p.dmg, {src:byId(p.owner), hid:'p' + p.id + ':' + o.id, kb:p.type === 'orb' ? 4 : 2});
+      if (!p.pierce) { p.life = 0; return; }
+      p.hit[o.id] = 1;
+    }
+  }
+}
+function explodeGrenade(p) {
+  fx.push({x:p.x, y:p.y, r:2, life:0.2, max:0.2, color:'#8f9bff'});
+  for (const o of bodies()) {
+    if (o.dead) continue;
+    if (Math.hypot(CXx(o) - p.x, CYy(o) - p.y) <= 2.15) hurt(o, 2, {src:byId(p.owner), hid:'gr' + p.id, kb:4});
+  }
+  zones.push({x:p.x, y:p.y, r:2, life:2});
+}
+function explodeSquare(p) {
+  fx.push({x:p.x, y:p.y, r:0.55, life:0.16, max:0.16, color:'#9aa6ff'});
+  for (const o of bodies()) {
+    if (o.dead || o.id === p.owner || o.team === p.team) continue;
+    if (Math.hypot(CXx(o) - p.x, CYy(o) - p.y) <= 0.7) hurt(o, 5, {src:byId(p.owner), hid:'sq' + p.id, kb:6});
+  }
+}
+function updateZone(z, dt) {
+  z.life -= dt;
+  for (const e of bodies()) {
+    if (e.dead) continue;
+    const dx = z.x - CXx(e), dy = z.y - CYy(e), d = Math.hypot(dx, dy);
+    if (d < z.r && d > 0.12) { e.vx += dx / d * 28 * dt * 6; e.vy += dy / d * 22 * dt * 6; }
+  }
+}
+
+function roll(which) {
+  const r = Math.random();
+  if (which === 'slime') return r < 0.1 ? 'rusher' : r < 0.5 ? 'launcher' : 'pint';
+  if (which === 'knight') return r < 0.5 ? 'rusher' : r < 0.8 ? 'launcher' : 'pint';
+  return ['launcher', 'rusher', 'pint'][Math.floor(Math.random() * 3)];
+}
+function quotaOf(which, stage) { return which === 'slime' ? stage * 2 + 1 : Math.abs(stage * 3 - 5); }
+function spawnSpot() {
+  const spots = [];
+  for (const p of PLATS) spots.push({x:p.x + 0.7 + Math.random() * Math.max(0.4, p.w - 1.4), y:p.y});
+  for (let i = 0; i < 8; i++) spots.push({x:1.4 + Math.random() * (BW - 2.8), y:1});
+  const far = spots.filter(s => fighters.every(f => f.dead || Math.hypot(s.x - CXx(f), s.y - f.y) > 8));
+  const pool = far.length ? far : spots;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+function addMob(sub, countRaid) {
+  let s = spawnSpot();
+  for (let i = 0; i < 6; i++) { if (!inSolid(s.x, s.y, 0.8, 1.4)) break; s = spawnSpot(); }
+  const tint = game.which === 'knight' ? 'knight' : null;
+  mobs.push(makeMob(sub, s.x, s.y, tint));
+  if (countRaid) game.spawned++;
+}
+function refill() {
+  if (!game || game.mode !== 'raid' || game.bossing || game.over) return;
+  let g = 0;
+  while (mobs.filter(m => !m.dead).length < 6 && game.spawned < game.quota && g++ < 8) addMob(roll(game.which), true);
+}
+function setupWave() {
+  mobs = []; bosses = []; projs = []; zones = [];
+  game.quota = quotaOf(game.which, game.stage);
+  game.spawned = 0; game.killed = 0; game.clearWait = 0; game.bossing = false;
+  const k = game.which;
+  progress[k] = Math.max(progress[k] || 1, game.stage);
+  saveProgress();
+  refill();
+}
+function beginBoss() {
+  mobs = []; projs = []; zones = [];
+  game.bossing = true; game.clearWait = 0;
+  progress[game.which + 'Boss'] = true;
+  saveProgress();
+  bosses = [makeBoss(game.which)];
+}
+
+function resetWorld() {
+  fighters = []; mobs = []; bosses = []; projs = []; zones = []; fx = []; nums = [];
+  T = 0; shake = 0;
+}
+function startDuel(c1, c2, opt = {}) {
+  resetWorld();
+  const p1 = makeFighter(c1, 6, 0, opt.name1 || myName());
+  const p2 = makeFighter(c2, BW - 8, 1, opt.name2 || (opt.ai === false ? '2P' : 'AI'));
+  p2.ai = !!opt.ai;
+  if (opt.local2p) p2.ai = false;
+  fighters = [p1, p2];
+  game = {
+    mode:'duel', which:null, stage:0, rules:{adds:true, rewards:true},
+    addT:4.5, over:false, winTeam:null, bossing:false, local2p:!!opt.local2p,
+    setup:{type:'duel', c1, c2, opt}
+  };
+  net.myTeam = opt.myTeam || 0;
+  S.screen = 'battle'; S.pause = false; nameEl.blur();
+}
+function startRaid(char, which, stage, asBoss, opt = {}) {
+  resetWorld();
+  const p1 = makeFighter(char, 7, 0, opt.name1 || myName());
+  fighters = [p1];
+  if (opt.coop) {
+    const p2 = makeFighter(opt.c2 || char, 11, 0, '2P');
+    p2.ai = false; fighters.push(p2);
+  }
+  if (opt.p2char) {
+    const p2 = makeFighter(opt.p2char, 11, 0, opt.name2 || '동료');
+    p2.ai = false; fighters.push(p2);
+  }
+  game = {
+    mode:'raid', which, stage, rules:{adds:false, rewards:false},
+    quota:quotaOf(which, stage), spawned:0, killed:0, clearWait:0, bossing:!!asBoss,
+    over:false, winTeam:null, addT:99, local2p:!!opt.coop,
+    setup:{type:'raid', char, which, stage, asBoss, opt}
+  };
+  net.myTeam = 0;
+  if (asBoss) beginBoss();
+  else setupWave();
+  S.screen = 'battle'; S.pause = false; nameEl.blur();
+}
+
+function simulate(dt) {
+  if (!game || game.over) return;
+  const cam = camera();
+  const inputs = fighters.map((e, i) => {
+    if (e.dead) return blankInp(e);
+    if (net.role === 'host' && e.owner && e.owner !== myId) return finalizeInp(e, Object.assign({left:false, right:false, jump:false, lmb:false, rmb:false, aimX:e.x + 2, aimY:e.y + 1}, net.remote || {}));
+    if (e.ai) return aiInp(e);
+    if (i === 0) return humanInp(e, 'p1', cam);
+    return humanInp(e, 'p2', cam);
+  });
+  fighters.forEach((e, i) => updateFighter(e, inputs[i], dt));
+  for (const m of mobs) updateMob(m, dt);
+  for (const b of bosses) updateBoss(b, dt);
+  for (const p of projs) updateProj(p, dt);
+  for (const z of zones) updateZone(z, dt);
+  projs = projs.filter(p => p.life > 0 && p.y > -2 && p.y < BH + 4);
+  zones = zones.filter(z => z.life > 0);
+  mobs = mobs.filter(m => !m.dead || (m.flash > 0));
+  mobs.forEach(m => { if (m.dead) m.flash -= dt; });
+  fx.forEach(f => f.life -= dt); fx = fx.filter(f => f.life > 0);
+  nums.forEach(n => { n.y += n.vy * dt; n.life -= dt; }); nums = nums.filter(n => n.life > 0);
+  if (game.rules.adds) {
+    game.addT -= dt;
+    if (game.addT <= 0) {
+      game.addT = 4 + Math.random() * 3;
+      if (mobs.filter(m => !m.dead).length < 4) addMob(roll('any'), false);
+    }
+  }
+  refill();
+  if (game.mode === 'raid' && !game.bossing && game.spawned >= game.quota && mobs.every(m => m.dead)) {
+    game.clearWait = (game.clearWait || 1.5) - dt;
+    if (game.clearWait <= 0) {
+      if (game.stage >= 12) beginBoss();
+      else {
+        progress[game.which] = Math.max(progress[game.which], game.stage + 1);
+        saveProgress();
+        game.stage++;
+        setupWave();
+      }
+    }
+  }
+  if (game.mode === 'duel') {
+    const alive = fighters.filter(f => !f.dead);
+    if (fighters.length >= 1 && alive.length <= (fighters.length >= 2 ? 1 : 0)) {
+      game.over = true; game.winTeam = alive[0] ? alive[0].team : -1;
+    }
+  } else if (fighters.every(f => f.dead)) { game.over = true; game.winTeam = -1; }
+  else if (game.bossing && bosses.length && bosses.every(b => b.dead)) { game.over = true; game.winTeam = 0; }
+}
+
+let camCache = null;
+function camera() {
+  const focus = fighters.find(f => f.owner === myId) || fighters.find(f => !f.ai) || fighters[0] || {x:BW / 2, y:2, w:1, h:1};
+  let z = Math.round(Math.min(W / 24, H / 13));
+  z = clamp(z, 32, 48);
+  const vw = W / z, vh = H / z;
+  let cx = clamp(focus.x + focus.w / 2, vw / 2 - 1.2, BW - vw / 2 + 1.2);
+  let cy = clamp((focus.y || 1) + 2.2, vh * 0.35, BH - vh * 0.45);
+  if (game && game.local2p && fighters.length > 1 && !fighters[0].dead && !fighters[1].dead) {
+    cx = clamp((fighters[0].x + fighters[1].x) / 2, vw / 2 - 1.2, BW - vw / 2 + 1.2);
+  }
+  camCache = {cx, cy, z};
+  return camCache;
+}
+function w2s(wx, wy, cam) {
+  return {x:W / 2 + (wx - cam.cx) * cam.z, y:H / 2 - (wy - cam.cy) * cam.z};
+}
+function s2w(sx, sy, cam) {
+  return {x:cam.cx + (sx - W / 2) / cam.z, y:cam.cy - (sy - H / 2) / cam.z};
+}
+
+function roundRect(x, y, w, h, col) { ctx.fillStyle = col; ctx.fillRect(Math.round(x), Math.round(y), Math.ceil(w), Math.ceil(h)); }
+
+function drawWorld(cam) {
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, '#6ea4e6'); sky.addColorStop(0.62, '#8ebbea'); sky.addColorStop(1, '#d5e2b8');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(255,255,255,.85)';
+  [[8, BH - 2, 3, 1.1], [18, BH - 1.2, 4, 1.4], [30, BH - 2.4, 2.6, 0.9]].forEach(c => {
+    const p = w2s(c[0], c[1], cam);
+    roundRect(p.x, p.y, c[2] * cam.z, c[3] * cam.z * 0.45, 'rgba(255,255,255,.8)');
+  });
+  const left = cam.cx - W / cam.z / 2 - 1, right = cam.cx + W / cam.z / 2 + 1;
+  for (let x = Math.floor(left); x < right; x++) {
+    const p = w2s(x, 1, cam);
+    ctx.fillStyle = (x & 1) ? '#7a5638' : '#6b4a30';
+    ctx.fillRect(Math.round(p.x), Math.round(p.y), cam.z + 1, cam.z + 2);
+    ctx.fillStyle = '#3e2918';
+    ctx.fillRect(Math.round(p.x), Math.round(p.y), cam.z + 1, 4);
+    ctx.fillStyle = ((x * 3) & 2) ? '#8d6844' : '#5c412b';
+    ctx.fillRect(Math.round(p.x + 4), Math.round(p.y + 8), 6, 5);
+  }
+  for (const s of SOLIDS) {
+    const a = w2s(s.x, s.y + s.h, cam);
+    ctx.fillStyle = '#8d919c';
+    ctx.fillRect(Math.round(a.x), Math.round(a.y), s.w * cam.z, s.h * cam.z);
+    ctx.fillStyle = '#c5cad3';
+    ctx.fillRect(Math.round(a.x), Math.round(a.y), 4, s.h * cam.z);
+  }
+  for (const p of PLATS) {
+    const a = w2s(p.x, p.y, cam);
+    ctx.fillStyle = '#6e7584';
+    ctx.fillRect(Math.round(a.x), Math.round(a.y), p.w * cam.z, 0.32 * cam.z);
+    ctx.fillStyle = '#c9a15a';
+    ctx.fillRect(Math.round(a.x), Math.round(a.y), p.w * cam.z, 5);
+  }
+  for (const o of ORBS) {
+    const p = w2s(o.x, o.y, cam), r = 0.42 * cam.z;
+    ctx.fillStyle = '#ffe14a';
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill();
+    ctx.fillStyle = '#fff6c2';
+    ctx.fillRect(p.x - r * 0.35, p.y - r * 0.45, r * 0.28, r * 0.28);
+  }
+}
+
+function drawActor(e, cam) {
+  if (e.dead && e.kind !== 'fighter') return;
+  const feet = w2s(e.x, e.y, cam);
+  const top = w2s(e.x, e.y + e.h, cam);
+  const pw = e.w * cam.z, ph = e.h * cam.z;
+  ctx.save();
+  ctx.translate(Math.round(feet.x + pw / 2), Math.round(feet.y));
+  if (e.facing < 0) ctx.scale(-1, 1);
+  ctx.globalAlpha = e.dead ? 0.35 : e.iframe > 0 && Math.sin(T * 40) > 0 ? 0.55 : 1;
+  const col = e.kind === 'boss' ? (e.sub === 'slime' ? '#67d24a' : '#2a3142')
+    : e.kind === 'mob' ? (e.sub === 'launcher' ? '#7dba4a' : e.sub === 'rusher' ? '#e25b4a' : '#ff9a32')
+    : charOf(e.char).color;
+  const tint = e.tint === 'knight' ? '#1c2433' : col;
+  ctx.fillStyle = 'rgba(0,0,0,.25)';
+  ctx.fillRect(-pw * 0.4, 2, pw * 0.8, 6);
+  if (e.kind === 'boss' && e.sub === 'slime') {
+    ctx.fillStyle = e.flash > 0 ? '#fff' : '#8ee86a';
+    ctx.fillRect(-pw / 2, -ph, pw, ph * 0.82);
+    ctx.fillStyle = '#2a2418';
+    ctx.fillRect(-pw * 0.22, -ph * 0.62, pw * 0.12, pw * 0.12);
+    ctx.fillRect(pw * 0.08, -ph * 0.62, pw * 0.12, pw * 0.12);
+  } else if (e.kind === 'boss') {
+    ctx.fillStyle = e.flash > 0 ? '#fff' : '#222a38';
+    ctx.fillRect(-pw / 2, -ph, pw, ph);
+    ctx.fillStyle = '#d23a3a';
+    ctx.fillRect(-pw * 0.2, -ph * 0.72, pw * 0.42, pw * 0.16);
+  } else if (e.kind === 'mob' && e.sub === 'pint') {
+    ctx.fillStyle = e.fused > 0 && Math.sin(T * 30) > 0 ? '#fff' : tint;
+    ctx.fillRect(-pw / 2, -ph, pw, ph);
+  } else {
+    ctx.fillStyle = e.flash > 0 ? '#fff' : tint;
+    ctx.fillRect(-pw * 0.38, -ph * 0.72, pw * 0.76, ph * 0.48);
+    ctx.fillStyle = e.flash > 0 ? '#fff' : '#f2d2b0';
+    ctx.fillRect(-pw * 0.28, -ph * 0.98, pw * 0.56, ph * 0.28);
+    ctx.fillStyle = tint;
+    ctx.fillRect(-pw * 0.42, -ph * 0.28, pw * 0.24, ph * 0.28);
+    ctx.fillRect(pw * 0.16, -ph * 0.28, pw * 0.24, ph * 0.28);
+    if (e.char === 'charger' || e.sub === 'rusher') {
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(pw * 0.15, -ph * 0.55, pw * 0.38, 4);
+    }
+  }
+  ctx.restore();
+  if (e.char === 'shifter' && !e.dead) {
+    const n = e.clones || 1;
+    for (let i = 0; i < n; i++) {
+      const cp = clonePos(e, i);
+      const sp = w2s(cp.x, cp.y, cam);
+      ctx.globalAlpha = 0.8;
+      ctx.fillStyle = '#d7c2ff';
+      ctx.fillRect(sp.x - 7, sp.y - 16, 14, 16);
+      ctx.globalAlpha = 1;
+    }
+  }
+  if (e.anchored) {
+    const a = w2s(CXx(e), e.y + 0.9, cam), b = w2s(e.anchored.x, e.anchored.y, cam);
+    ctx.strokeStyle = '#7ee7ff'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    ctx.fillStyle = 'rgba(80,210,255,.35)';
+    ctx.beginPath(); ctx.arc(b.x, b.y, cam.z, 0, 7); ctx.fill();
+  }
+  if ((e.holdL > 0.05) && (e.char === 'charger' || e.char === 'howler') && e.aimX != null) {
+    const a = w2s(CXx(e), e.y + 0.8, cam);
+    const ang = Math.atan2(-(w2s(e.aimX, e.aimY, cam).y - a.y), w2s(e.aimX, e.aimY, cam).x - a.x);
+    const len = 18 + (e.char === 'howler' ? e.holdL / 3 : Math.min(1, e.holdL)) * 36;
+    ctx.strokeStyle = e.char === 'howler' ? '#ff7ad8' : '#ffe14a';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(a.x + Math.cos(ang) * len, a.y - Math.sin(ang) * len);
+    ctx.stroke();
+  }
+  if (e.kind !== 'fighter') {
+    const scale = e.kind === 'boss' ? 2 : 2;
+    const slots = Math.ceil(e.maxHp / 2);
+    const hw = heartsWidth(slots, scale);
+    const hpPos = w2s(CXx(e), e.y + e.h + 0.35, cam);
+    drawHearts(hpPos.x - hw / 2, hpPos.y - 20, e.hp, e.maxHp, 0, scale);
+  }
+}
+
+function drawProj(p, cam) {
+  const s = w2s(p.x, p.y, cam);
+  ctx.fillStyle = p.type === 'goo' ? '#8ee86a' : p.type === 'orb' ? '#d6ff7a' : p.type === 'soul' ? '#e6d2ff' : p.type === 'square' ? '#9db0ff' : p.type === 'grenade' ? '#6d7cff' : p.type === 'arrow' ? '#f4e2b0' : p.type === 'sword' ? '#d9dde8' : p.type === 'star' ? '#ffe14a' : '#9aefff';
+  const r = Math.max(3, (p.r || 0.2) * cam.z);
+  if (p.type === 'orb' || p.type === 'goo') {
+    ctx.beginPath(); ctx.ellipse(s.x, s.y, r * 1.4, r, 0, 0, 7); ctx.fill();
+  } else if (p.type === 'square') ctx.fillRect(s.x - r, s.y - r, r * 2, r * 2);
+  else ctx.fillRect(s.x - r * 0.6, s.y - r * 0.6, r * 1.3, r);
+}
+function drawVision(cam) {
+  const lights = fighters.filter(f => !f.dead && !f.ai && (net.role !== 'guest' ? f.team === (net.myTeam || 0) || (game && game.local2p) : f.team === net.myTeam));
+  if (!lights.length) return;
+  ctx.save();
+  ctx.fillStyle = 'rgba(8,14,28,.72)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalCompositeOperation = 'destination-out';
+  for (const f of lights) {
+    const p = w2s(CXx(f), f.y + 0.8, cam);
+    const r = 7 * cam.z;
+    const g = ctx.createRadialGradient(p.x, p.y, r * 0.42, p.x, p.y, r);
+    g.addColorStop(0, 'rgba(0,0,0,1)');
+    g.addColorStop(0.78, 'rgba(0,0,0,.45)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill();
+  }
+  ctx.restore();
+}
+function drawHUD(cam) {
+  const me = fighters.find(f => f.team === (net.myTeam || 0) && !f.ai) || fighters[0];
+  if (me) {
+    const sc = clamp(Math.round(Math.min(W, H) / 280), 2, 4);
+    drawHearts(16, 16, me.hp, me.maxHp, me.bonus, sc);
+    text(me.name + (me.haste > 0 ? '  가속' : '') + (me.dmgCutT > 0 ? '  방어' : ''), 16, 16 + Math.ceil(me.maxHp / 20) * 10 * sc + (me.bonus > 0 ? 10 * sc + 6 : 8), 14, '#1a1208');
+  }
+  if (game && game.mode === 'duel') {
+    const foe = fighters.find(f => f !== me);
+    if (foe) {
+      const sc = clamp(Math.round(Math.min(W, H) / 320), 2, 3);
+      const hw = heartsWidth(Math.ceil(foe.maxHp / 2), sc);
+      drawHearts(W - 16 - hw, 16, foe.hp, foe.maxHp, foe.bonus, sc);
+      ctx.textAlign = 'right';
+      text(foe.name, W - 16, 16 + 10 * sc + 8, 14, '#1a1208', 'right');
+    }
+  }
+  if (game && game.mode === 'raid') {
+    const label = (game.which === 'slime' ? '슬라임 토벌대' : '검은 기사단') + (game.bossing ? '  보스' : '  ' + game.stage + '단계');
+    const sub = game.bossing ? '보스전' : ('처치 ' + game.killed + ' / ' + game.quota);
+    text(label, W / 2, 14, 20, '#1a1208', 'center');
+    text(sub, W / 2, 40, 14, '#243018', 'center');
+    if (game.clearWait > 0) text('단계 클리어', W / 2, 68, 22, '#145214', 'center');
+  }
+  if (game && game.bossing && bosses[0]) {
+    const b = bosses[0];
+    const sc = 2;
+    const hw = heartsWidth(10, sc);
+    text(b.name, W / 2, 64, 16, '#1a1208', 'center');
+    drawHearts(W / 2 - hw / 2, 86, b.hp, b.maxHp, 0, sc);
+  }
+  const cd = me && me.cd ? me.cd : null;
+  if (cd && me && !game.over) {
+    const tip = charOf(me.char).tip;
+    text(tip, 16, H - 28, 13, '#1a1208');
+  }
+}
+
+function renderBattle() {
+  const cam = camera();
+  ctx.save();
+  if (shake > 0) {
+    ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+    shake *= 0.86;
+  }
+  drawWorld(cam);
+  for (const z of zones) {
+    const p = w2s(z.x, z.y, cam);
+    ctx.fillStyle = 'rgba(120,140,255,.28)';
+    ctx.beginPath(); ctx.arc(p.x, p.y, z.r * cam.z, 0, 7); ctx.fill();
+  }
+  for (const f of fx) {
+    const p = w2s(f.x, f.y, cam);
+    ctx.globalAlpha = Math.max(0, f.life / f.max);
+    ctx.strokeStyle = f.color; ctx.lineWidth = 3;
+    ctx.beginPath();
+    if (f.cone !== undefined) {
+      ctx.moveTo(p.x, p.y);
+      ctx.arc(p.x, p.y, f.r * cam.z * (1 - f.life / f.max), -f.cone - f.span, -f.cone + f.span);
+    } else ctx.arc(p.x, p.y, f.r * cam.z, 0, 7);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  for (const e of [...mobs, ...bosses, ...fighters]) drawActor(e, cam);
+  for (const p of projs) drawProj(p, cam);
+  for (const n of nums) {
+    const p = w2s(n.x, n.y, cam);
+    ctx.globalAlpha = Math.max(0, n.life);
+    text(n.text, p.x, p.y, 16, n.color, 'center');
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+  drawVision(cam);
+  drawHUD(cam);
+  if (S.pause) {
+    ctx.fillStyle = 'rgba(8,10,16,.45)'; ctx.fillRect(0, 0, W, H);
+    text('일시정지', W / 2, H / 2 - 80, 36, '#fff', 'center');
+    button(W / 2 - 110, H / 2 - 10, 220, 48, '계속', () => { S.pause = false; });
+    button(W / 2 - 110, H / 2 + 50, 220, 48, '메뉴', () => leaveMatch());
+  } else if (game && game.over) {
+    ctx.fillStyle = 'rgba(8,10,16,.4)'; ctx.fillRect(0, 0, W, H);
+    let title = '끝';
+    if (game.mode === 'duel') {
+      const wnr = fighters.find(f => f.team === game.winTeam);
+      title = wnr ? (wnr.name + ' 승') : '무승부';
+    } else title = game.winTeam === 0 ? '토벌 성공' : '토벌 실패';
+    text(title, W / 2, H / 2 - 110, 40, '#fff', 'center');
+    if (game.mode === 'raid' && game.winTeam !== 0) {
+      button(W / 2 - 120, H / 2 - 30, 240, 46, '이 단계 다시', () => retryRaid(false));
+      button(W / 2 - 120, H / 2 + 26, 240, 46, '단계 선택', () => { S.me = game.setup.char; S.which = game.which; S.screen = 'stages'; game = null; });
+    } else if (game.mode === 'duel') {
+      button(W / 2 - 120, H / 2 - 20, 240, 46, '다시', () => {
+        const s = game.setup;
+        if (net.role) return;
+        startDuel(s.c1, s.c2, s.opt);
+      });
+    }
+    button(W / 2 - 120, H / 2 + 84, 240, 46, '메뉴', () => leaveMatch());
+  }
+}
+
+function leaveMatch() {
+  if (net.code) fetch(DB + '/rooms/' + net.code + (net.role === 'guest' ? '/guest' : '') + '.json', {method:'DELETE'}).catch(() => {});
+  fetch(DB + '/queue/' + myId + '.json', {method:'DELETE'}).catch(() => {});
+  net.role = null; net.code = ''; net.room = null; net.remote = null; net.playing = false;
+  game = null; S.pause = false; S.screen = 'title';
+}
+function retryRaid() {
+  const s = game.setup;
+  startRaid(s.char, s.which, s.stage, s.asBoss, s.opt);
+}
+
+function showName(on) { nameEl.style.display = on ? 'block' : 'none'; }
+
+function frameMenu() {
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, '#6ea4e6'); sky.addColorStop(1, '#c9d7a4');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+  for (let x = 0; x < W; x += 48) {
+    ctx.fillStyle = (Math.floor(x / 48) & 1) ? '#7a5638' : '#6b4a30';
+    ctx.fillRect(x, H - 64, 48, 64);
+    ctx.fillStyle = '#3e2918'; ctx.fillRect(x, H - 64, 48, 6);
+  }
+  const sc = clamp(Math.round(Math.min(W, H) / 260), 3, 5);
+  if (S.screen === 'title') {
+    showName(false);
+    text('그라운드', W / 2, H * 0.16, Math.min(84, W / 10), '#1a1208', 'center');
+    text('AVP  ·  PVP', W / 2, H * 0.16 + 78, 18, '#243018', 'center');
+    const hw = heartsWidth(10, sc);
+    drawHearts(W / 2 - hw / 2, H * 0.16 + 112, 15, 20, 0, sc);
+    button(W / 2 - 150, H * 0.58, 300, 52, 'AI와 대전', () => {
+      openPick('내 캐릭터', c => { S.me = c; openPick('AI 캐릭터', f => startDuel(c, f, {ai:true, name2:'AI'})); });
+    });
+    button(W / 2 - 150, H * 0.58 + 64, 300, 52, '사람 대전', () => { S.screen = 'pvp'; pingFB(); });
+    button(W / 2 - 150, H * 0.58 + 128, 300, 52, '조작', () => { S.screen = 'help'; });
+  } else if (S.screen === 'help') {
+    showName(false);
+    text('그라운드', 48, 36, 32, '#1a1208');
+    const lines = [
+      'A D 이동    Space 점프, 한 번 더 누르면 더블 점프    W S 는 쓰지 않음',
+      '마우스 방향으로 기술. 좌클릭과 우클릭은 캐릭터마다 다름.',
+      '차져는 벽을 본 채 방향키를 누른 뒤 Space 로 벽차기.',
+      '플레이어 체력 20 = 하트 10칸. 적 체력 10 = 하트 5칸. 핀트는 하트 2칸 반.',
+      '금색 하트는 추가 체력. 피해를 먼저 대신 맞는다.',
+      '전투 중 3초 동안 공격하거나 맞지 않으면 체력이 천천히 찬다.',
+      '시야는 7칸. 그 밖은 어두워진다.',
+      '대전 중 발판 위에 적이 나타난다. 잡으면 이속, 회복, 추가 체력.',
+      '토벌대에서는 그 보너스가 없다. 단계의 몬스터를 다 잡으면 다음 단계, 12단계 다음은 보스.',
+      '2P 같은 화면: 방향키 이동, 위 점프, K 좌클릭, L 우클릭.'
+    ];
+    lines.forEach((ln, i) => text(ln, 48, 90 + i * 32, 16, '#1a1208'));
+    button(48, H - 90, 160, 46, '뒤로', () => { S.screen = 'title'; });
+  } else if (S.screen === 'pick') {
+    showName(false);
+    text(S.pickTitle, W / 2, 36, 32, '#1a1208', 'center');
+    const cols = 3, bw = Math.min(240, (W - 80) / cols - 16), bh = 78;
+    const totalW = cols * bw + (cols - 1) * 16;
+    const x0 = (W - totalW) / 2, y0 = 100;
+    CHARS.forEach((c, i) => {
+      const x = x0 + (i % cols) * (bw + 16), y = y0 + Math.floor(i / cols) * (bh + 14);
+      button(x, y, bw, bh, c.name, () => S.pickCb && S.pickCb(c.id), {on:false, fs:20});
+      ctx.fillStyle = c.color; ctx.fillRect(x + 10, y + 10, 14, 14);
+      ctx.fillStyle = '#d5def2'; ctx.font = '12px Malgun Gothic, sans-serif';
+      ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      ctx.fillText(c.tip, x + 30, y + bh - 26);
+    });
+    button(24, H - 70, 120, 44, '뒤로', () => { S.screen = 'title'; });
+  } else if (S.screen === 'pvp') {
+    showName(true);
+    text('사람 대전', W / 2, 70, 36, '#1a1208', 'center');
+    const st = fb.state === 'ok' ? 'Firebase 연결됨' : fb.state === 'denied' ? '데이터베이스 규칙이 막혀 있음' : fb.state === 'unknown' ? '연결 확인 중' : '연결 실패';
+    text(st + '  ·  ground-81292', W / 2, 118, 14, '#243018', 'center');
+    button(W / 2 - 160, 170, 320, 48, '무작위 매칭', () => openPick('매칭 캐릭터', c => { S.me = c; S.screen = 'qmode'; }), {off:fb.state !== 'ok'});
+    button(W / 2 - 160, 228, 320, 48, '방 만들기', () => makeRoom(), {off:fb.state !== 'ok'});
+    button(W / 2 - 160, 286, 320, 48, '코드 입력', () => { S.code = ''; S.screen = 'join'; }, {off:fb.state !== 'ok'});
+    button(W / 2 - 160, 344, 320, 48, '몹 토벌대', () => openPick('토벌 캐릭터', c => { S.me = c; S.which = 'slime'; S.screen = 'stages'; }));
+    button(W / 2 - 160, 402, 320, 48, '같은 화면 대전', () => openPick('1P', c => { S.me = c; openPick('2P', f => startDuel(c, f, {ai:false, local2p:true, name1:myName(), name2:'2P'})); }));
+    if (fb.state === 'denied') {
+      text('콘솔 → Realtime Database → 규칙에 아래를 저장하면 매칭이 열립니다.', W / 2, 470, 14, '#4a140e', 'center');
+      text('{ "rules": { "queue": {".read": true, ".write": true}, "rooms": {".read": true, ".write": true} } }', W / 2, 494, 13, '#1a1208', 'center');
+    }
+    button(24, H - 70, 120, 44, '뒤로', () => { S.screen = 'title'; });
+  } else if (S.screen === 'qmode') {
+    showName(true);
+    text('매칭 방식', W / 2, 80, 32, '#1a1208', 'center');
+    text(charOf(S.me).name, W / 2, 124, 16, '#243018', 'center');
+    button(W / 2 - 160, 180, 320, 52, '기본 대전', () => startQueue('duel', null));
+    button(W / 2 - 160, 246, 320, 52, '슬라임 토벌대', () => startQueue('raid', 'slime'));
+    button(W / 2 - 160, 312, 320, 52, '검은 기사단', () => startQueue('raid', 'knight'));
+    button(24, H - 70, 120, 44, '뒤로', () => { S.screen = 'pvp'; });
+  } else if (S.screen === 'queue') {
+    showName(true);
+    text('상대를 찾는 중', W / 2, H / 2 - 80, 32, '#1a1208', 'center');
+    text(charOf(S.me).name + (S.qmode === 'raid' ? '  ·  토벌' : '  ·  대전'), W / 2, H / 2 - 30, 16, '#243018', 'center');
+    button(W / 2 - 100, H / 2 + 20, 200, 46, '취소', () => cancelQueue());
+  } else if (S.screen === 'join') {
+    showName(true);
+    text('방 코드', W / 2, H / 2 - 100, 28, '#1a1208', 'center');
+    text(S.code.padEnd(4, '_').split('').join('  '), W / 2, H / 2 - 40, 48, '#1a1208', 'center');
+    text('글자 4개 후 Enter', W / 2, H / 2 + 30, 14, '#243018', 'center');
+    if (S.joinErr) text(S.joinErr, W / 2, H / 2 + 54, 14, '#8a1c14', 'center');
+    button(W / 2 - 80, H / 2 + 90, 160, 44, '뒤로', () => { S.screen = 'pvp'; });
+  } else if (S.screen === 'lobby') {
+    showName(true);
+    const room = net.room || {};
+    text('방  ' + (net.code || ''), W / 2, 28, 28, '#1a1208', 'center');
+    const host = room.host || {}, guest = room.guest;
+    text('방장  ' + (host.name || '...') + '  ·  ' + charOf(host.char || 'charger').name, W / 2, 78, 16, '#1a1208', 'center');
+    text(guest ? ('상대  ' + guest.name + '  ·  ' + charOf(guest.char || 'charger').name) : '상대를 기다리는 중', W / 2, 104, 16, '#243018', 'center');
+    const mine = net.role === 'guest' ? guest : host;
+    text('캐릭터', W / 2, 140, 14, '#243018', 'center');
+    CHARS.forEach((c, i) => {
+      const bw = 86, x = W / 2 - (9 * bw + 8 * 6) / 2 + i * (bw + 6);
+      button(x, 168, bw, 40, c.name, () => lobbyChar(c.id), {on:mine && mine.char === c.id, fs:13});
+    });
+    if (net.role === 'host') {
+      button(W / 2 - 220, 230, 200, 42, '기본 대전', () => patchRoom({mode:'duel'}), {on:room.mode !== 'raid', fs:16});
+      button(W / 2 + 20, 230, 200, 42, '몹 토벌대', () => patchRoom({mode:'raid'}), {on:room.mode === 'raid', fs:16});
+      if (room.mode === 'raid') {
+        button(W / 2 - 220, 284, 200, 40, '슬라임', () => patchRoom({raid:'slime'}), {on:room.raid !== 'knight', fs:16});
+        button(W / 2 + 20, 284, 200, 40, '검은 기사단', () => patchRoom({raid:'knight'}), {on:room.raid === 'knight', fs:16});
+        text('시작 단계 ' + (room.stage || 1), W / 2, 338, 16, '#1a1208', 'center');
+        button(W / 2 - 150, 366, 48, 36, '-', () => patchRoom({stage:Math.max(1, (room.stage || 1) - 1)}), {fs:20});
+        button(W / 2 + 102, 366, 48, 36, '+', () => patchRoom({stage:Math.min(12, (room.stage || 1) + 1)}), {fs:20});
+      }
+      button(W / 2 - 120, 430, 240, 48, '시작', () => startOnline(), {off:!guest});
+    } else {
+      text(room.mode === 'raid' ? ((room.raid === 'knight' ? '검은 기사단 ' : '슬라임 토벌 ') + (room.stage || 1) + '단계') : '기본 대전', W / 2, 250, 18, '#1a1208', 'center');
+      text('방장이 시작하면 들어갑니다.', W / 2, 284, 14, '#243018', 'center');
+    }
+    button(24, H - 70, 140, 44, '나가기', () => leaveMatch());
+  } else if (S.screen === 'stages') {
+    showName(false);
+    text('몹 토벌대', W / 2, 28, 30, '#1a1208', 'center');
+    button(W / 2 - 230, 74, 220, 40, '슬라임 토벌대', () => { S.which = 'slime'; }, {on:S.which === 'slime', fs:16});
+    button(W / 2 + 10, 74, 220, 40, '검은 기사단', () => { S.which = 'knight'; }, {on:S.which === 'knight', fs:16});
+    const which = S.which;
+    const info = which === 'slime'
+      ? '생성 수  단계×2+1    러셔 10%  런쳐 40%  핀트 50%    12단계 후 보스'
+      : '생성 수  |단계×3−5|    러셔 50%  런쳐 30%  핀트 20%    12단계 후 보스';
+    text(info, W / 2, 126, 14, '#243018', 'center');
+    text('필드에는 최대 6마리. 한 마리가 줄면 바로 다음 마리가 8칸 밖에서 나온다.', W / 2, 148, 13, '#243018', 'center');
+    const unlocked = progress[which] || 1;
+    for (let i = 1; i <= 12; i++) {
+      const col = (i - 1) % 6, row = Math.floor((i - 1) / 6);
+      const x = W / 2 - 270 + col * 92, y = 184 + row * 58;
+      button(x, y, 84, 48, String(i), () => startRaid(S.me, which, i, false, {coop:S.coop, name1:myName()}), {off:i > unlocked, fs:18});
+    }
+    button(W / 2 - 120, 312, 240, 44, '보스', () => startRaid(S.me, which, 12, true, {coop:S.coop, name1:myName()}), {off:!progress[which + 'Boss']});
+    button(W / 2 - 200, H - 76, 180, 42, S.coop ? '2인 켜짐' : '혼자', () => { S.coop = !S.coop; }, {on:S.coop, fs:16});
+    button(24, H - 76, 120, 42, '뒤로', () => { S.screen = 'pvp'; });
+  }
+}
+
+function openPick(title, cb) { S.pickTitle = title; S.pickCb = cb; S.screen = 'pick'; }
+
+async function fbReq(method, path, body) {
+  const res = await fetch(DB + path + '.json', {
+    method,
+    headers: body !== undefined ? {'Content-Type':'application/json'} : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    const err = new Error(text || String(res.status));
+    err.status = res.status;
+    throw err;
+  }
+  return text ? JSON.parse(text) : null;
+}
+function fbFail(e) {
+  if (e && (e.status === 401 || e.status === 403)) { fb.state = 'denied'; fb.msg = 'rules'; }
+  else if (fb.state !== 'denied') { fb.state = 'down'; fb.msg = (e && e.message) || 'fail'; }
+}
+async function pingFB() {
+  if (fb.state === 'ok' || fb.state === 'denied') return;
+  try { await fbReq('GET', '/queue'); fb.state = 'ok'; }
+  catch (e) { fbFail(e); }
+}
+function makeCode() {
+  const a = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let s = '';
+  for (let i = 0; i < 4; i++) s += a[Math.floor(Math.random() * a.length)];
+  return s;
+}
+async function makeRoom() {
+  if (fb.state !== 'ok') return;
+  const code = makeCode();
+  net.code = code; net.role = 'host';
+  const room = {host:{id:myId, name:myName(), char:S.me || 'charger'}, guest:null, mode:'duel', raid:'slime', stage:1, status:'lobby', ping:Date.now()};
+  try {
+    await fbReq('PUT', '/rooms/' + code, room);
+    net.room = room; S.screen = 'lobby';
+  } catch (e) { fbFail(e); }
+}
+async function tryJoin() {
+  S.joinErr = '';
+  try {
+    const room = await fbReq('GET', '/rooms/' + S.code);
+    if (!room || !room.host) { S.joinErr = '없는 방입니다'; return; }
+    if (room.guest && room.guest.id !== myId) { S.joinErr = '이미 가득 찬 방입니다'; return; }
+    net.code = S.code; net.role = 'guest'; net.room = room;
+    await fbReq('PATCH', '/rooms/' + S.code, {guest:{id:myId, name:myName(), char:'charger'}});
+    S.screen = 'lobby';
+  } catch (e) { fbFail(e); S.joinErr = '연결 실패'; }
+}
+async function patchRoom(partial) {
+  if (net.role !== 'host' || !net.code) return;
+  Object.assign(net.room, partial);
+  try { await fbReq('PATCH', '/rooms/' + net.code, partial); } catch (e) { fbFail(e); }
+}
+async function lobbyChar(id) {
+  if (!net.room || !net.code) return;
+  if (net.role === 'host') {
+    net.room.host = Object.assign({}, net.room.host, {char:id, name:myName()});
+    try { await fbReq('PATCH', '/rooms/' + net.code + '/host', net.room.host); } catch (e) { fbFail(e); }
+  } else {
+    const g = {id:myId, name:myName(), char:id};
+    net.room.guest = g;
+    try { await fbReq('PATCH', '/rooms/' + net.code, {guest:g}); } catch (e) { fbFail(e); }
+  }
+}
+function startOnline() {
+  const room = net.room;
+  if (!room || !room.guest) return;
+  room.status = 'play';
+  fbReq('PATCH', '/rooms/' + net.code, {status:'play', ping:Date.now()}).catch(fbFail);
+  beginOnlineGame(room);
+}
+function beginOnlineGame(room) {
+  if (net.playing) return;
+  const h = room.host || {}, g = room.guest || {};
+  if (room.mode === 'raid') {
+    startRaid(h.char || 'charger', room.raid || 'slime', room.stage || 1, false, {name1:h.name, p2char:g.char || 'charger', name2:g.name});
+    if (fighters[1]) fighters[1].team = 0;
+  } else {
+    startDuel(h.char || 'charger', g.char || 'spinner', {ai:false, name1:h.name || '방장', name2:g.name || '상대', myTeam: net.role === 'guest' ? 1 : 0});
+    fighters.forEach(f => { f.ai = false; });
+  }
+  if (fighters[0]) fighters[0].owner = h.id || myId;
+  if (fighters[1]) fighters[1].owner = g.id || null;
+  net.role = net.role || 'host';
+  net.playing = true;
+  if (room.mode === 'raid') net.myTeam = 0;
+}
+async function startQueue(mode, raid) {
+  S.qmode = mode; S.qraid = raid; S.screen = 'queue'; net.role = null; net.acc = 0;
+  try {
+    await fbReq('PUT', '/queue/' + myId, {name:myName(), char:S.me, mode, raid:raid || null, ts:Date.now()});
+    fb.state = 'ok';
+  } catch (e) { fbFail(e); S.screen = 'pvp'; }
+}
+async function cancelQueue() {
+  try { await fbReq('DELETE', '/queue/' + myId); } catch (e) {}
+  S.screen = 'pvp';
+}
+async function pollQueue() {
+  if (net.busy || S.screen !== 'queue') return;
+  net.busy = true;
+  try {
+    const all = await fbReq('GET', '/queue') || {};
+    const mine = all[myId];
+    if (mine && mine.room) {
+      const room = await fbReq('GET', '/rooms/' + mine.room);
+      await fbReq('DELETE', '/queue/' + myId);
+      net.code = mine.room;
+      if (room && room.host && room.host.id === myId) net.role = 'host';
+      else net.role = 'guest';
+      net.room = room;
+      if (room && room.mode === 'duel' && room.status === 'play') beginOnlineGame(room);
+      else S.screen = 'lobby';
+      net.busy = false; return;
+    }
+    const others = Object.entries(all).filter(([id, v]) => id !== myId && v && !v.room && v.mode === S.qmode && v.raid === (S.qraid || null) && Date.now() - (v.ts || 0) < 20000);
+    others.sort((a, b) => a[0] < b[0] ? -1 : 1);
+    if (others.length && myId < others[0][0]) {
+      const foe = others[0];
+      const code = makeCode();
+      const room = {
+        host:{id:myId, name:myName(), char:S.me},
+        guest:{id:foe[0], name:foe[1].name, char:foe[1].char},
+        mode:S.qmode, raid:S.qraid || 'slime', stage:1,
+        status:S.qmode === 'duel' ? 'play' : 'lobby', ping:Date.now()
+      };
+      await fbReq('PUT', '/rooms/' + code, room);
+      await fbReq('PATCH', '/queue/' + myId, {room:code});
+      await fbReq('PATCH', '/queue/' + foe[0], {room:code});
+    } else {
+      await fbReq('PATCH', '/queue/' + myId, {ts:Date.now(), name:myName(), char:S.me});
+    }
+  } catch (e) { fbFail(e); S.screen = 'pvp'; }
+  net.busy = false;
+}
+function serF(e) {
+  return {
+    id:e.id, kind:e.kind, char:e.char || null, sub:e.sub || null, team:e.team, name:e.name || '',
+    x:+e.x.toFixed(2), y:+e.y.toFixed(2), w:e.w, h:e.h, vx:+(e.vx || 0).toFixed(2), vy:+(e.vy || 0).toFixed(2),
+    hp:Math.max(0, Math.round(e.hp)), maxHp:e.maxHp, bonus:e.bonus || 0, facing:e.facing || 1,
+    dead:!!e.dead, flash:e.flash > 0 ? 0.1 : 0, onGround:!!e.onGround, tint:e.tint || null, owner:e.owner || null,
+    anchored:e.anchored ? {x:+e.anchored.x.toFixed(2), y:+e.anchored.y.toFixed(2)} : null,
+    cloneA:e.cloneA || 0, clones:e.clones || 1, holdL:e.holdL || 0, spinT:e.spinT || 0,
+    act:e.act || null, fused:e.fused || 0, haste:e.haste > 0 ? 1 : 0, boosting:!!e.boosting
+  };
+}
+function publishState() {
+  if (net.role !== 'host' || !net.code || !game) return;
+  const snap = {
+    t:Date.now(),
+    fighters:fighters.map(serF), mobs:mobs.filter(m => !m.dead).map(serF), bosses:bosses.map(serF),
+    projs:projs.slice(0, 40).map(p => ({type:p.type, x:+p.x.toFixed(2), y:+p.y.toFixed(2), vx:+p.vx.toFixed(2), vy:+p.vy.toFixed(2), r:p.r, team:p.team})),
+    zones:zones.map(z => ({x:z.x, y:z.y, r:z.r, life:z.life})),
+    meta:{mode:game.mode, which:game.which, stage:game.stage, quota:game.quota, killed:game.killed, bossing:!!game.bossing, over:!!game.over, winTeam:game.winTeam}
+  };
+  fbReq('PUT', '/rooms/' + net.code + '/state', snap).catch(() => {});
+}
+function sendInput(cam) {
+  if (net.role !== 'guest' || !fighters.length) return;
+  const me = fighters.find(f => f.team === net.myTeam) || fighters[net.myTeam] || fighters[0];
+  const w = s2w(mouse.x, mouse.y, cam);
+  const body = {
+    left:!!keys.KeyA, right:!!keys.KeyD, jump:!!keys.Space, lmb:mouse.l, rmb:mouse.r,
+    aimX:+w.x.toFixed(2), aimY:+w.y.toFixed(2), ts:Date.now()
+  };
+  fbReq('PUT', '/rooms/' + net.code + '/guestIn', body).catch(() => {});
+}
+function applySnap(s) {
+  if (!s) return;
+  const hydrate = o => Object.assign({dashT:0, pullT:0, cd:{l:0, r:0, ch:0}, iframe:0, jumps:0, wall:0, _pl:false, _pr:false, _pj:false, mem:{}, lastCombat:-9}, o);
+  fighters = (s.fighters || []).map(hydrate);
+  mobs = (s.mobs || []).map(hydrate);
+  bosses = (s.bosses || []).map(hydrate);
+  projs = (s.projs || []).map(p => Object.assign({life:1, dmg:0, owner:-1}, p));
+  zones = s.zones || [];
+  if (s.meta && game) {
+    game.stage = s.meta.stage; game.quota = s.meta.quota; game.killed = s.meta.killed;
+    game.bossing = s.meta.bossing; game.over = s.meta.over; game.winTeam = s.meta.winTeam;
+    game.which = s.meta.which; game.mode = s.meta.mode;
+  }
+}
+async function pollOnline() {
+  if (!net.code || net.busy) return;
+  net.busy = true;
+  try {
+    if (S.screen === 'lobby') {
+      const room = await fbReq('GET', '/rooms/' + net.code);
+      if (room) {
+        net.room = room;
+        if (room.status === 'play') beginOnlineGame(room);
+      }
+    } else if (S.screen === 'battle' && net.role === 'host') {
+      publishState();
+      const inp = await fbReq('GET', '/rooms/' + net.code + '/guestIn');
+      if (inp) net.remote = inp;
+    } else if (S.screen === 'battle' && net.role === 'guest') {
+      const st = await fbReq('GET', '/rooms/' + net.code + '/state');
+      if (st) applySnap(st);
+    }
+  } catch (e) { fbFail(e); }
+  net.busy = false;
+}
+
+function frameBattle(dt) {
+  showName(false);
+  if (net.role === 'guest') {
+    predict(dt);
+    renderBattle();
+    return;
+  }
+  if (!S.pause && !(game && game.over)) simulate(dt);
+  else {
+    fx.forEach(f => f.life -= dt);
+  }
+  renderBattle();
+}
+function predict(dt) {
+  for (const e of bodies()) if (!e.dead) { e.x += (e.vx || 0) * dt; e.y += (e.vy || 0) * dt; }
+  for (const p of projs) { p.x += (p.vx || 0) * dt; p.y += (p.vy || 0) * dt; }
+}
+
+function loop(now) {
+  const dt = Math.min(0.033, (now - (loop.t || now)) / 1000) || 0.016;
+  loop.t = now;
+  hits = [];
+  ctx.clearRect(0, 0, W, H);
+  if (S.screen === 'battle' && game) frameBattle(dt);
+  else frameMenu();
+  uiClick();
+  if (S.screen === 'queue') { net.acc += dt; if (net.acc > 0.8) { net.acc = 0; pollQueue(); } }
+  if ((S.screen === 'lobby' || (S.screen === 'battle' && net.role)) && net.code) {
+    net.inAcc += dt;
+    const step = S.screen === 'battle' ? 0.12 : 0.45;
+    if (net.inAcc > step) { net.inAcc = 0; pollOnline(); if (net.role === 'guest' && S.screen === 'battle') sendInput(camera()); }
+  }
+  prevK.Space = keys.Space;
+  requestAnimationFrame(loop);
+}
+
+window.G = {get fighters(){return fighters;}, get game(){return game;}, hurt, startDuel, DB};
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
