@@ -71,14 +71,14 @@ const keys = {}, prevK = {};
 const mouse = {x:0, y:0, l:false, r:false};
 const pointer = {x:0, y:0, click:null};
 let hits = [];
-let myId = localStorage.getItem('ground-id');
-if (!myId) { myId = Math.random().toString(36).slice(2, 10); localStorage.setItem('ground-id', myId); }
+let myId = sessionStorage.getItem('ground-tab');
+if (!myId) { myId = Math.random().toString(36).slice(2, 10); sessionStorage.setItem('ground-tab', myId); }
 let progress = {slime:1, knight:1, slimeBoss:false, knightBoss:false};
 try { progress = Object.assign(progress, JSON.parse(localStorage.getItem('ground-save') || '{}')); } catch (e) {}
 
 const S = {screen:'title', back:'title', code:'', me:'charger', foe:'spinner', coop:false, which:'slime', pause:false, pickTitle:'', pickCb:null};
 const fb = {state:'unknown', msg:''};
-const net = {role:null, code:'', room:null, busy:false, acc:0, inAcc:0, myTeam:0, viewFresh:false};
+const net = {role:null, code:'', room:null, busy:false, acc:0, inAcc:0, myTeam:0, viewFresh:false, outSeq:0};
 
 nameEl.value = localStorage.getItem('ground-name') || '플레이어';
 function myName() {
@@ -1002,7 +1002,7 @@ function simulate(dt) {
   const cam = camera();
   const inputs = fighters.map((e, i) => {
     if (e.dead) return blankInp(e);
-    if (net.role === 'host' && e.owner && e.owner !== myId) return finalizeInp(e, Object.assign({left:false, right:false, jump:false, lmb:false, rmb:false, aimX:e.x + 2, aimY:e.y + 1}, net.remote || {}));
+    if (net.role === 'host' && e.owner && e.owner !== myId) return takeRemote(e);
     if (e.ai) return aiInp(e);
     if (i === 0) return humanInp(e, 'p1', cam);
     return humanInp(e, 'p2', cam);
@@ -1391,7 +1391,7 @@ function drawProj(p, cam) {
 }
 let fogCvs = null, fogCtx = null;
 function drawVision(cam) {
-  const lights = fighters.filter(f => !f.dead && !f.ai && (net.role !== 'guest' ? f.team === (net.myTeam || 0) || (game && game.local2p) : f.team === net.myTeam));
+  const lights = visionActors();
   if (!lights.length) return;
   if (!fogCvs || fogCvs.width !== canvas.width || fogCvs.height !== canvas.height) {
     fogCvs = document.createElement('canvas');
@@ -1467,8 +1467,23 @@ function playerPlate(e, side, keys) {
   }
   if (keys && e.cd && !e.dead) skillRows(e, left ? hx : hx + hw - 132, nameY + 20, keys);
 }
+function myFighter() {
+  if (net.role) {
+    const owned = fighters.find(f => f.owner === myId);
+    if (owned) return owned;
+  }
+  return fighters.find(f => f.team === (net.myTeam || 0) && !f.ai) || fighters.find(f => !f.ai) || fighters[0];
+}
+function visionActors() {
+  if (game && game.local2p) return fighters.filter(f => !f.dead && !f.ai);
+  if (net.role) {
+    const mine = fighters.filter(f => !f.dead && f.owner === myId);
+    if (mine.length) return mine;
+  }
+  return fighters.filter(f => !f.dead && !f.ai && f.team === (net.myTeam || 0));
+}
 function drawHUD(cam) {
-  const me = fighters.find(f => f.team === (net.myTeam || 0) && !f.ai) || fighters.find(f => !f.ai) || fighters[0];
+  const me = myFighter();
   const mineKeys = game && game.local2p && me && me.team === 1 ? ['K', 'L'] : ['좌', '우'];
   if (me) playerPlate(me, 'left', mineKeys);
   if (game && game.mode === 'duel') {
@@ -1547,11 +1562,13 @@ function renderBattle() {
       } else title = game.winTeam === 0 ? '토벌 성공' : '토벌 실패';
       text(title, x, y, 26, '#eceae4');
       y += 48;
-      if (game.mode === 'raid' && game.winTeam !== 0) {
-        button(x, y, 220, 40, '이 단계 다시', () => retryRaid(false));
+      if (net.role !== 'guest' && game.mode === 'raid' && game.winTeam !== 0) {
+        button(x, y, 220, 40, '이 단계 다시', () => { if (net.role === 'host') restartOnline(); else retryRaid(false); });
         y += 44;
-        button(x, y, 220, 40, '단계 선택', () => { S.me = game.setup.char; S.which = game.which; S.screen = 'stages'; game = null; });
-        y += 44;
+        if (!net.role) {
+          button(x, y, 220, 40, '단계 선택', () => { S.me = game.setup.char; S.which = game.which; S.screen = 'stages'; game = null; });
+          y += 44;
+        }
       } else if (game.mode === 'duel' && !net.role) {
         button(x, y, 220, 40, '다시', () => {
           const s = game.setup;
@@ -1565,9 +1582,13 @@ function renderBattle() {
 }
 
 function leaveMatch() {
-  if (net.code) fetch(DB + '/rooms/' + net.code + (net.role === 'guest' ? '/guest' : '') + '.json', {method:'DELETE'}).catch(() => {});
+  if (net.code) {
+    const path = net.role === 'guest' ? '/rooms/' + net.code + '/guest' : '/rooms/' + net.code;
+    fetch(DB + path + '.json', {method:'DELETE'}).catch(() => {});
+    if (net.role === 'guest') fetch(DB + '/rooms/' + net.code + '/guestIn.json', {method:'DELETE'}).catch(() => {});
+  }
   fetch(DB + '/queue/' + myId + '.json', {method:'DELETE'}).catch(() => {});
-  net.role = null; net.code = ''; net.room = null; net.remote = null; net.playing = false;
+  net.role = null; net.code = ''; net.room = null; net.remote = null; net.playing = false; net.tapReady = false;
   game = null; S.pause = false; S.screen = 'title';
 }
 function retryRaid() {
@@ -1760,18 +1781,26 @@ function openPick(title, cb) {
 }
 
 async function fbReq(method, path, body) {
-  const res = await fetch(DB + path + '.json', {
-    method,
-    headers: body !== undefined ? {'Content-Type':'application/json'} : undefined,
-    body: body !== undefined ? JSON.stringify(body) : undefined
-  });
-  const text = await res.text();
-  if (!res.ok) {
-    const err = new Error(text || String(res.status));
-    err.status = res.status;
-    throw err;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 2500);
+  try {
+    const res = await fetch(DB + path + '.json', {
+      method,
+      cache: 'no-store',
+      headers: body !== undefined ? {'Content-Type':'application/json'} : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: ctrl.signal
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      const err = new Error(text || String(res.status));
+      err.status = res.status;
+      throw err;
+    }
+    return text ? JSON.parse(text) : null;
+  } finally {
+    clearTimeout(timer);
   }
-  return text ? JSON.parse(text) : null;
 }
 function fbFail(e) {
   if (e && (e.status === 401 || e.status === 403)) { fb.state = 'denied'; fb.msg = 'rules'; }
@@ -1825,12 +1854,24 @@ async function lobbyChar(id) {
     try { await fbReq('PATCH', '/rooms/' + net.code, {guest:g}); } catch (e) { fbFail(e); }
   }
 }
-function startOnline() {
+async function startOnline() {
+  if (!net.code) return;
+  try {
+    const room = await fbReq('GET', '/rooms/' + net.code);
+    if (!room || !room.guest) return;
+    net.room = room;
+    room.status = 'play';
+    await fbReq('PATCH', '/rooms/' + net.code, {status:'play', ping:Date.now()});
+    beginOnlineGame(room);
+  } catch (e) { fbFail(e); }
+}
+function restartOnline() {
   const room = net.room;
-  if (!room || !room.guest) return;
-  room.status = 'play';
-  fbReq('PATCH', '/rooms/' + net.code, {status:'play', ping:Date.now()}).catch(fbFail);
+  if (!room || !game) return;
+  if (game.mode === 'raid') { room.stage = game.stage; room.raid = game.which; room.mode = 'raid'; }
+  net.playing = false;
   beginOnlineGame(room);
+  publishState();
 }
 function beginOnlineGame(room) {
   if (net.playing) return;
@@ -1846,6 +1887,10 @@ function beginOnlineGame(room) {
   if (fighters[1]) fighters[1].owner = g.id || null;
   net.role = net.role || 'host';
   net.playing = true;
+  net.remote = null;
+  net.tapReady = false;
+  net.liveAfter = Date.now();
+  net.snapAge = 0;
   if (room.mode === 'raid') net.myTeam = 0;
 }
 async function startQueue(mode, raid) {
@@ -1874,7 +1919,7 @@ async function pollQueue() {
       net.room = room;
       if (room && room.mode === 'duel' && room.status === 'play') beginOnlineGame(room);
       else S.screen = 'lobby';
-      net.busy = false; return;
+      return;
     }
     const others = Object.entries(all).filter(([id, v]) => id !== myId && v && !v.room && v.mode === S.qmode && v.raid === (S.qraid || null) && Date.now() - (v.ts || 0) < 20000);
     others.sort((a, b) => a[0] < b[0] ? -1 : 1);
@@ -1894,7 +1939,7 @@ async function pollQueue() {
       await fbReq('PATCH', '/queue/' + myId, {ts:Date.now(), name:myName(), char:S.me});
     }
   } catch (e) { fbFail(e); S.screen = 'pvp'; }
-  net.busy = false;
+  finally { net.busy = false; }
 }
 function serF(e) {
   return {
@@ -1903,7 +1948,10 @@ function serF(e) {
     hp:Math.max(0, Math.round(e.hp)), maxHp:e.maxHp, bonus:e.bonus || 0, facing:e.facing || 1,
     dead:!!e.dead, flash:e.flash > 0 ? 0.1 : 0, onGround:!!e.onGround, tint:e.tint || null, owner:e.owner || null,
     anchored:e.anchored ? {x:+e.anchored.x.toFixed(2), y:+e.anchored.y.toFixed(2)} : null,
-    cloneA:e.cloneA || 0, clones:e.clones || 1, holdL:e.holdL || 0, spinT:e.spinT || 0,
+    cloneA:e.cloneA || 0, clones:e.clones || 1, holdL:e.holdL || 0, holdR:e.holdR || 0, spinT:e.spinT || 0,
+    aimX:+(e.aimX == null ? e.x : e.aimX).toFixed(2), aimY:+(e.aimY == null ? e.y : e.aimY).toFixed(2),
+    cd:{l:+(e.cd && e.cd.l || 0).toFixed(2), r:+(e.cd && e.cd.r || 0).toFixed(2), ch:+(e.cd && e.cd.ch || 0).toFixed(2)},
+    dmgCutT:e.dmgCutT > 0 ? +e.dmgCutT.toFixed(2) : 0,
     act:e.act || null, fused:e.fused || 0, haste:e.haste > 0 ? 1 : 0, boosting:!!e.boosting
   };
 }
@@ -1918,12 +1966,49 @@ function publishState() {
   };
   fbReq('PUT', '/rooms/' + net.code + '/state', snap).catch(() => {});
 }
+const netTap = {l:0, r:0, j:0, wasL:false, wasR:false, wasJ:false, ackL:0, ackR:0, ackJ:0, gapL:false, gapR:false, gapJ:false};
+function watchGuestTaps() {
+  if (!(net.role === 'guest' && S.screen === 'battle')) return;
+  const l = !!mouse.l, r = !!mouse.r, j = !!(keys.Space || keys.ArrowUp);
+  if (l && !netTap.wasL) netTap.l++;
+  if (r && !netTap.wasR) netTap.r++;
+  if (j && !netTap.wasJ) netTap.j++;
+  netTap.wasL = l; netTap.wasR = r; netTap.wasJ = j;
+}
+function takeRemote(e) {
+  const r = net.remote;
+  const fresh = !!(r && net.gotAt && net.gotAt >= (net.liveAfter || 0) && Date.now() - net.gotAt < 800);
+  const inp = {left:false, right:false, jump:false, lmb:false, rmb:false, aimX:e.aimX || e.x + (e.facing || 1) * 2, aimY:e.aimY || e.y + 1};
+  if (!fresh) return finalizeInp(e, inp);
+  if (!net.tapReady) {
+    netTap.ackL = r.tapL || 0; netTap.ackR = r.tapR || 0; netTap.ackJ = r.tapJ || 0;
+    netTap.gapL = netTap.gapR = netTap.gapJ = false;
+    net.tapReady = true;
+  }
+  inp.left = !!r.left; inp.right = !!r.right; inp.jump = !!r.jump;
+  inp.lmb = !!r.lmb; inp.rmb = !!r.rmb;
+  if (typeof r.aimX === 'number') inp.aimX = r.aimX;
+  if (typeof r.aimY === 'number') inp.aimY = r.aimY;
+  const missed = (count, ack, gap, held) => {
+    if (held) { netTap[ack] = count || netTap[ack]; netTap[gap] = false; return false; }
+    if (netTap[gap]) { netTap[gap] = false; return false; }
+    if ((count || 0) <= netTap[ack]) return false;
+    netTap[ack]++;
+    netTap[gap] = (count - netTap[ack]) > 0;
+    return true;
+  };
+  if (missed(r.tapL, 'ackL', 'gapL', inp.lmb)) inp.lmb = true;
+  if (missed(r.tapR, 'ackR', 'gapR', inp.rmb)) inp.rmb = true;
+  if (missed(r.tapJ, 'ackJ', 'gapJ', inp.jump)) inp.jump = true;
+  return finalizeInp(e, inp);
+}
 function sendInput(cam) {
   if (net.role !== 'guest' || !fighters.length) return;
-  const me = fighters.find(f => f.team === net.myTeam) || fighters[net.myTeam] || fighters[0];
   const w = s2w(mouse.x, mouse.y, cam);
   const body = {
-    left:!!keys.KeyA, right:!!keys.KeyD, jump:!!keys.Space, lmb:mouse.l, rmb:mouse.r,
+    left:!!(keys.KeyA || keys.ArrowLeft), right:!!(keys.KeyD || keys.ArrowRight),
+    jump:!!(keys.Space || keys.ArrowUp), lmb:mouse.l, rmb:mouse.r,
+    tapL:netTap.l, tapR:netTap.r, tapJ:netTap.j, seq:++net.outSeq,
     aimX:+w.x.toFixed(2), aimY:+w.y.toFixed(2), ts:Date.now()
   };
   fbReq('PUT', '/rooms/' + net.code + '/guestIn', body).catch(() => {});
@@ -1941,6 +2026,7 @@ function applySnap(s) {
     game.bossing = s.meta.bossing; game.over = s.meta.over; game.winTeam = s.meta.winTeam;
     game.which = s.meta.which; game.mode = s.meta.mode;
   }
+  net.snapAge = 0;
 }
 async function pollOnline() {
   if (!net.code || net.busy) return;
@@ -1955,13 +2041,16 @@ async function pollOnline() {
     } else if (S.screen === 'battle' && net.role === 'host') {
       publishState();
       const inp = await fbReq('GET', '/rooms/' + net.code + '/guestIn');
-      if (inp) net.remote = inp;
+      if (inp) {
+        if (inp.seq !== net.lastSeq) { net.lastSeq = inp.seq; net.gotAt = Date.now(); }
+        net.remote = inp;
+      }
     } else if (S.screen === 'battle' && net.role === 'guest') {
       const st = await fbReq('GET', '/rooms/' + net.code + '/state');
       if (st) applySnap(st);
     }
   } catch (e) { fbFail(e); }
-  net.busy = false;
+  finally { net.busy = false; }
 }
 
 function frameBattle(dt) {
@@ -1978,6 +2067,8 @@ function frameBattle(dt) {
   renderBattle();
 }
 function predict(dt) {
+  net.snapAge = (net.snapAge || 0) + dt;
+  if (net.snapAge > 0.22) return;
   for (const e of bodies()) if (!e.dead) { e.x += (e.vx || 0) * dt; e.y += (e.vy || 0) * dt; }
   for (const p of projs) { p.x += (p.vx || 0) * dt; p.y += (p.vy || 0) * dt; }
 }
@@ -1986,6 +2077,7 @@ function loop(now) {
   const dt = Math.min(0.033, (now - (loop.t || now)) / 1000) || 0.016;
   loop.t = now;
   hits = [];
+  watchGuestTaps();
   ctx.clearRect(0, 0, W, H);
   if (S.screen === 'battle' && game) frameBattle(dt);
   else frameMenu();
@@ -1993,7 +2085,7 @@ function loop(now) {
   if (S.screen === 'queue') { net.acc += dt; if (net.acc > 0.8) { net.acc = 0; pollQueue(); } }
   if ((S.screen === 'lobby' || (S.screen === 'battle' && net.role)) && net.code) {
     net.inAcc += dt;
-    const step = S.screen === 'battle' ? 0.12 : 0.45;
+    const step = S.screen === 'battle' ? 0.09 : 0.45;
     if (net.inAcc > step) { net.inAcc = 0; pollOnline(); if (net.role === 'guest' && S.screen === 'battle') sendInput(camera()); }
   }
   prevK.Space = keys.Space;
