@@ -343,6 +343,16 @@ function hurt(t, amount, opt = {}) {
 function kill(t) {
   t.dead = true; t.hp = 0; t.vx = 0;
   fx.push({x:CXx(t), y:CYy(t), r:t.kind === 'boss' ? 2.2 : 0.8, life:0.28, max:0.28, color:t.kind === 'boss' ? '#b6ff57' : '#fff'});
+  if (t.kind === 'fighter' && game && (game.mode === 'gem' || game.mode === 'ball')) {
+    if (game.mode === 'gem') dropGems(t);
+    if (game.ball && game.ball.holder === t) {
+      game.ball.holder = null;
+      game.ball.vx = t.vx || 0;
+      game.ball.vy = 7;
+      game.ball.lock = 0.35;
+    }
+    t.respawn = 3;
+  }
   if (t.kind === 'mob') {
     if (game && game.mode === 'raid' && !t.counted) { t.counted = true; game.killed++; }
     const src = t.lastSrc;
@@ -986,6 +996,8 @@ function startTeam(players) {
     const team = i < half ? 0 : 1;
     const f = makeFighter(p.char || 'charger', teamSpawnX(team, team === 0 ? i : i - half, half), team, p.name || '플레이어');
     f.owner = p.id;
+    f.slot = team === 0 ? i : i - half;
+    f.gems = 0;
     f.ai = online ? false : i !== 0;
     return f;
   });
@@ -1017,6 +1029,223 @@ function startAiTeam(size, me) {
   }
   net.role = null;
   startTeam(players);
+}
+const HOOPS = [
+  {x:2.6, y:5.5, team:1, side:-1},
+  {x:BW - 2.6, y:5.5, team:0, side:1}
+];
+function initObjective(kind) {
+  game.mode = kind;
+  game.rules = {adds:false, rewards:false};
+  if (game.setup) game.setup.mode = kind;
+  fighters.forEach(f => { f.gems = 0; f.respawn = 0; });
+  if (kind === 'gem') {
+    game.loose = [];
+    game.mineT = 0.5;
+    game.totals = [0, 0];
+    game.lead = -1;
+    game.leadT = 12;
+    game.need = 8;
+    game.ball = null;
+  } else {
+    game.ball = {x:BW / 2, y:6.5, vx:0, vy:0, holder:null, lock:0.4};
+    game.score = [0, 0];
+    game.need = 5;
+    game.loose = null;
+  }
+}
+function startObjective(kind, me) {
+  startAiTeam(6, me);
+  initObjective(kind);
+}
+function dropGems(t) {
+  const n = t.gems || 0;
+  t.gems = 0;
+  if (!game || !game.loose) return;
+  for (let i = 0; i < n; i++) {
+    game.loose.push({
+      x:CXx(t) + (Math.random() - 0.5) * 0.6,
+      y:t.y + 1.3,
+      vx:(Math.random() - 0.5) * 5,
+      vy:5 + Math.random() * 3
+    });
+  }
+}
+function reviveFighter(f) {
+  f.dead = false;
+  f.hp = f.maxHp;
+  f.bonus = 0;
+  f.vx = 0;
+  f.vy = 0;
+  f.x = teamSpawnX(f.team, f.slot || 0, 3);
+  f.y = 1;
+  f.gems = 0;
+  f.iframe = 1.1;
+  f.flash = 0;
+  f.respawn = 0;
+  f.holdL = 0;
+  f.holdR = 0;
+}
+function tickRespawn(dt) {
+  if (!game || (game.mode !== 'gem' && game.mode !== 'ball')) return;
+  for (const f of fighters) {
+    if (!f.dead || !(f.respawn > 0)) continue;
+    f.respawn -= dt;
+    if (f.respawn <= 0) reviveFighter(f);
+  }
+}
+function steerObjective(e, inp) {
+  if (!inp || e.dead) return;
+  const go = (x) => {
+    if (CXx(e) < x - 0.45) { inp.left = false; inp.right = true; }
+    else if (CXx(e) > x + 0.45) { inp.right = false; inp.left = true; }
+  };
+  if (game.mode === 'gem') {
+    let best = null, bd = 1e9;
+    for (const g of game.loose || []) {
+      const d = Math.hypot(g.x - CXx(e), g.y - (e.y + 0.6));
+      if (d < bd) { bd = d; best = g; }
+    }
+    const foe = nearestEnemy(e);
+    if (best && bd < 12 && (!foe || distC(e, foe) > 2.6)) {
+      go(best.x);
+      if (best.y > e.y + 1.5 && Math.abs(best.x - CXx(e)) < 1.6 && e.onGround) inp.jump = true;
+    }
+  } else if (game.mode === 'ball' && game.ball) {
+    const b = game.ball;
+    const hoop = HOOPS.find(h => h.team === e.team);
+    if (b.holder === e && hoop) {
+      go(hoop.x);
+      inp.aimX = hoop.x;
+      inp.aimY = hoop.y + 2.4;
+      if (Math.abs(CXx(e) - hoop.x) < 13 && (e.throwCd || 0) <= 0) inp.throw = true;
+    } else if (!b.holder) {
+      const foe = nearestEnemy(e);
+      if (!foe || distC(e, foe) > 2.3) go(b.x);
+      if (b.y > e.y + 1.5 && Math.abs(b.x - CXx(e)) < 1.4 && e.onGround) inp.jump = true;
+    } else if (b.holder.team !== e.team) go(CXx(b.holder));
+  }
+}
+function throwBall(e) {
+  const b = game.ball;
+  if (!b || b.holder !== e || e.dead) return;
+  const ox = CXx(e), oy = e.y + e.h * 0.65;
+  b.holder = null;
+  b.y = oy;
+  b.lock = 0.4;
+  e.throwCd = 0.75;
+  if (e.ai) {
+    const hoop = HOOPS.find(h => h.team === e.team) || HOOPS[0];
+    const dx = hoop.x - ox;
+    const dist = Math.max(2, Math.abs(dx));
+    const vx = clamp(dist * 0.85, 9, 15);
+    const t = dist / vx;
+    b.vx = Math.sign(dx || e.facing || 1) * vx;
+    b.vy = clamp(3.5 / t + 10 * t, 8, 16);
+    b.x = ox + Math.sign(b.vx) * 0.8;
+    return;
+  }
+  let dx = (e.aimX == null ? ox + e.facing * 8 : e.aimX) - ox;
+  let dy = (e.aimY == null ? oy + 4 : e.aimY) - oy;
+  const len = Math.hypot(dx, dy) || 1;
+  b.x = ox + dx / len * 0.9;
+  b.vx = dx / len * 18;
+  b.vy = dy / len * 18;
+}
+function updateGems(dt) {
+  game.mineT -= dt;
+  if (game.mineT <= 0 && game.loose.length < 7) {
+    game.mineT = 2.1;
+    game.loose.push({x:BW / 2 + (Math.random() - 0.5) * 2, y:5, vx:(Math.random() - 0.5) * 2, vy:1});
+  }
+  for (const g of game.loose) {
+    g.vy -= 20 * dt;
+    if (g.vy < -16) g.vy = -16;
+    g.x += g.vx * dt;
+    g.y += g.vy * dt;
+    if (g.y < 1) { g.y = 1; g.vy = 0; g.vx *= 0.8; }
+    if (g.x < 0.4) { g.x = 0.4; g.vx = Math.abs(g.vx); }
+    if (g.x > BW - 0.4) { g.x = BW - 0.4; g.vx = -Math.abs(g.vx); }
+  }
+  for (const f of fighters) {
+    if (f.dead) continue;
+    for (let i = game.loose.length - 1; i >= 0; i--) {
+      const g = game.loose[i];
+      if (Math.hypot(CXx(f) - g.x, (f.y + 0.5) - g.y) < 0.9) {
+        f.gems = (f.gems || 0) + 1;
+        game.loose.splice(i, 1);
+      }
+    }
+  }
+  const totals = [0, 0];
+  for (const f of fighters) if (!f.dead) totals[f.team] = (totals[f.team] || 0) + (f.gems || 0);
+  game.totals = totals;
+  const ahead = totals[0] === totals[1] ? -1 : totals[0] > totals[1] ? 0 : 1;
+  if (ahead >= 0 && totals[ahead] >= game.need) {
+    if (game.lead !== ahead) { game.lead = ahead; game.leadT = 12; }
+    else game.leadT -= dt;
+    if (game.leadT <= 0) { game.over = true; game.winTeam = ahead; }
+  } else {
+    game.lead = -1;
+    game.leadT = 12;
+  }
+}
+function updateBall(dt) {
+  const b = game.ball;
+  if (!b) return;
+  b.lock = Math.max(0, (b.lock || 0) - dt);
+  for (const f of fighters) f.throwCd = Math.max(0, (f.throwCd || 0) - dt);
+  const holder = b.holder;
+  if (holder && !holder.dead) {
+    if (holder._throw || (!holder.ai && holder._fEdge)) throwBall(holder);
+    if (b.holder) {
+      b.x = CXx(holder);
+      b.y = holder.y + holder.h * 0.7;
+      b.vx = holder.vx;
+      b.vy = holder.vy;
+      return;
+    }
+  } else b.holder = null;
+  const prevY = b.y;
+  b.vy -= 20 * dt;
+  if (b.vy < -16) b.vy = -16;
+  b.x += b.vx * dt;
+  b.y += b.vy * dt;
+  if (b.y < 1.25) { b.y = 1.25; b.vy = Math.abs(b.vy) * 0.55; b.vx *= 0.86; }
+  if (b.vy < 0) {
+    for (const p of PLATS) {
+      if (b.x > p.x && b.x < p.x + p.w && prevY >= p.y + 0.2 && b.y <= p.y + 0.2) {
+        b.y = p.y + 0.35;
+        b.vy = Math.abs(b.vy) * 0.45;
+        b.vx *= 0.9;
+      }
+    }
+  }
+  if (b.x < 0.4) { b.x = 0.4; b.vx = Math.abs(b.vx) * 0.7; }
+  if (b.x > BW - 0.4) { b.x = BW - 0.4; b.vx = -Math.abs(b.vx) * 0.7; }
+  for (const s of SOLIDS) {
+    if (b.x > s.x && b.x < s.x + s.w && b.y > s.y && b.y < s.y + s.h) {
+      if (b.x < s.x + s.w / 2) { b.x = s.x - 0.2; b.vx = -Math.abs(b.vx) * 0.6; }
+      else { b.x = s.x + s.w + 0.2; b.vx = Math.abs(b.vx) * 0.6; }
+    }
+  }
+  if (b.lock <= 0) {
+    for (const hoop of HOOPS) {
+      if (prevY > hoop.y && b.y <= hoop.y && Math.abs(b.x - hoop.x) < 0.85 && b.vy < 0) {
+        game.score[hoop.team] = (game.score[hoop.team] || 0) + 1;
+        b.x = BW / 2; b.y = 7; b.vx = 0; b.vy = 2; b.holder = null; b.lock = 0.8;
+        if (game.score[hoop.team] >= game.need) { game.over = true; game.winTeam = hoop.team; }
+        return;
+      }
+    }
+    for (const f of fighters) {
+      if (f.dead) continue;
+      if (Math.hypot(CXx(f) - b.x, (f.y + f.h * 0.55) - b.y) < 1) {
+        b.holder = f;
+        break;
+      }
+    }
+  }
 }
 function startDuel(c1, c2, opt = {}) {
   resetWorld();
@@ -1106,8 +1335,18 @@ function simulate(dt) {
     if (game.local2p && i === 1) return humanInp(e, 'p2', cam);
     return aiInp(e);
   });
+  fighters.forEach((e, i) => {
+    if (e.ai && inputs[i]) steerObjective(e, inputs[i]);
+    e._throw = !!(inputs[i] && inputs[i].throw);
+    const down = !e.ai && !!keys.KeyF;
+    e._fEdge = down && !e._fWas;
+    e._fWas = down;
+  });
   fighters.forEach((e, i) => updateFighter(e, inputs[i], dt));
   separateFighters();
+  tickRespawn(dt);
+  if (game.mode === 'gem') updateGems(dt);
+  if (game.mode === 'ball') updateBall(dt);
   for (const m of mobs) updateMob(m, dt);
   for (const b of bosses) updateBoss(b, dt);
   for (const p of projs) updateProj(p, dt);
@@ -1143,7 +1382,7 @@ function simulate(dt) {
     if (fighters.length >= 2 && aliveTeams.size <= 1) {
       game.over = true; game.winTeam = aliveTeams.size ? [...aliveTeams][0] : -1;
     }
-  } else if (fighters.every(f => f.dead)) { game.over = true; game.winTeam = -1; }
+  } else if (game.mode !== 'gem' && game.mode !== 'ball' && fighters.every(f => f.dead)) { game.over = true; game.winTeam = -1; }
   else if (game.bossing && bosses.length && bosses.every(b => b.dead)) { game.over = true; game.winTeam = 0; }
 }
 
@@ -1572,7 +1811,7 @@ function playerPlate(e, side, keys, dy) {
   if (keys && e.cd && !e.dead) skillRows(e, left ? hx : hx + hw - 132, nameY + 20, keys);
 }
 function teamWord(e) {
-  if (!game || game.mode !== 'duel' || !e || e.kind !== 'fighter' || e.dead) return '';
+  if (!game || (game.mode !== 'duel' && game.mode !== 'gem' && game.mode !== 'ball') || !e || e.kind !== 'fighter' || e.dead) return '';
   if (fighters.length < 2) return '';
   const me = myFighter();
   if (!me) return '';
@@ -1585,6 +1824,7 @@ function drawTeamTag(e, cam) {
   const ally = word === '아군';
   const col = ally ? '#eceae4' : '#e23b3b';
   text(word, head.x, head.y - 18, 12, col, 'center');
+  if (e.gems) text(String(e.gems), head.x + 20, head.y - 18, 12, '#e23b3b', 'left');
   ctx.fillStyle = col;
   ctx.fillRect(head.x - 9, head.y - 4, 18, 2);
 }
@@ -1628,10 +1868,11 @@ function drawHUD(cam) {
     });
   };
   if (allies.length) paintSide(allies, 'left');
-  if (game && game.mode === 'duel') {
+  if (game && (game.mode === 'duel' || game.mode === 'gem' || game.mode === 'ball')) {
     paintSide(foes, 'right');
-    if (fighters.length > 2) text(fighters.length >= 6 ? '3대3' : '2대2', W / 2, 16, 15, '#eceae4', 'center');
+    if (game.mode === 'duel' && fighters.length > 2) text(fighters.length >= 6 ? '3대3' : '2대2', W / 2, 16, 15, '#eceae4', 'center');
   }
+  drawObjectiveHud();
   if (game && game.mode === 'raid') {
     const label = (game.which === 'slime' ? '슬라임' : '기사단') + (game.bossing ? '  보스' : '  ' + game.stage);
     const sub = game.bossing ? '' : (game.killed + ' / ' + game.quota);
@@ -1648,6 +1889,80 @@ function drawHUD(cam) {
   }
 }
 
+function drawDiamond(x, y, r) {
+  ctx.beginPath();
+  ctx.moveTo(x, y - r);
+  ctx.lineTo(x + r * 0.72, y);
+  ctx.lineTo(x, y + r);
+  ctx.lineTo(x - r * 0.72, y);
+  ctx.closePath();
+  ctx.fill();
+}
+function drawObjectives(cam) {
+  if (!game) return;
+  if (game.mode === 'gem') {
+    const mine = w2s(BW / 2, 1, cam);
+    ctx.fillStyle = '#e23b3b';
+    drawDiamond(mine.x, mine.y - 10, 5);
+    for (const g of game.loose || []) {
+      const p = w2s(g.x, g.y, cam);
+      ctx.fillStyle = '#e23b3b';
+      drawDiamond(p.x, p.y, 8);
+    }
+  } else if (game.mode === 'ball') {
+    for (const hoop of HOOPS) {
+      const rim = w2s(hoop.x, hoop.y, cam);
+      const top = w2s(hoop.x + hoop.side * 0.15, hoop.y + 2.3, cam);
+      ctx.fillStyle = '#d0d4dc';
+      ctx.fillRect(top.x - 3, top.y, 6, rim.y - top.y);
+      ctx.strokeStyle = '#e23b3b';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(rim.x - 18, rim.y);
+      ctx.lineTo(rim.x + 18, rim.y);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(236,234,228,.45)';
+      ctx.lineWidth = 1;
+      for (let i = -2; i <= 2; i++) {
+        ctx.beginPath();
+        ctx.moveTo(rim.x + i * 7, rim.y);
+        ctx.lineTo(rim.x + i * 4, rim.y + 16);
+        ctx.stroke();
+      }
+    }
+    if (game.ball) {
+      const p = w2s(game.ball.x, game.ball.y, cam);
+      ctx.fillStyle = '#eceae4';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#121418';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 9, 0.4, 2.4);
+      ctx.stroke();
+    }
+  }
+}
+function drawObjectiveHud() {
+  if (!game || (game.mode !== 'gem' && game.mode !== 'ball')) return;
+  const me = myFighter();
+  const my = me ? me.team : 0;
+  const other = my === 0 ? 1 : 0;
+  if (game.mode === 'gem') {
+    const t = game.totals || [0, 0];
+    text('잼 그랩', W / 2, 16, 15, '#eceae4', 'center');
+    text((t[my] || 0) + '   :   ' + (t[other] || 0), W / 2, 36, 22, '#eceae4', 'center');
+    if (game.lead === my || game.lead === other) text((game.lead === my ? '아군  ' : '상대  ') + Math.ceil(game.leadT), W / 2, 64, 18, '#e23b3b', 'center');
+    else text('8개면 카운트', W / 2, 64, 13, '#8d8a82', 'center');
+  } else {
+    const s = game.score || [0, 0];
+    text('배스킷 볼', W / 2, 16, 15, '#eceae4', 'center');
+    text((s[my] || 0) + '   :   ' + (s[other] || 0), W / 2, 36, 22, '#eceae4', 'center');
+    text('5점', W / 2, 64, 13, '#8d8a82', 'center');
+    if (game.ball && game.ball.holder && !game.ball.holder.ai && game.ball.holder.owner === myId) text('F  던지기', W / 2, H - 46, 14, '#eceae4', 'center');
+  }
+}
 function renderBattle() {
   const cam = camera();
   ctx.save();
@@ -1683,6 +1998,7 @@ function renderBattle() {
   }
   ctx.restore();
   drawVision(cam);
+  drawObjectives(cam);
   drawHUD(cam);
   if (S.pause || (game && game.over)) {
     ctx.fillStyle = 'rgba(8,9,12,.62)';
@@ -1695,7 +2011,7 @@ function renderBattle() {
       button(x, y + 92, 220, 40, '메뉴로', () => leaveMatch());
     } else {
       let title = '끝';
-      if (game.mode === 'duel') {
+      if (game.mode === 'duel' || game.mode === 'gem' || game.mode === 'ball') {
         if (game.winTeam == null || game.winTeam < 0) title = '무승부';
         else if (fighters.length > 2) {
           const mine = myFighter();
@@ -1714,11 +2030,13 @@ function renderBattle() {
           button(x, y, 220, 40, '단계 선택', () => { S.me = game.setup.char; S.which = game.which; S.screen = 'stages'; game = null; });
           y += 44;
         }
-      } else if (game.mode === 'duel' && !net.role) {
+      } else if ((game.mode === 'duel' || game.mode === 'gem' || game.mode === 'ball') && !net.role) {
         button(x, y, 220, 40, '다시', () => {
           const s = game.setup;
-          if (s && s.type === 'team') startTeam(s.players);
-          else startDuel(s.c1, s.c2, s.opt);
+          if (s && s.type === 'team') {
+            startTeam(s.players);
+            if (s.mode === 'gem' || s.mode === 'ball') initObjective(s.mode);
+          } else startDuel(s.c1, s.c2, s.opt);
         });
         y += 44;
       }
@@ -1908,6 +2226,8 @@ function frameMenu() {
     });
     button(x, 212, 260, 40, '2대2', () => openPick('내 캐릭터', me => startAiTeam(4, me)));
     button(x, 256, 260, 40, '3대3', () => openPick('내 캐릭터', me => startAiTeam(6, me)));
+    button(x, 312, 260, 40, '잼 그랩', () => openPick('내 캐릭터', me => startObjective('gem', me)));
+    button(x, 356, 260, 40, '배스킷 볼', () => openPick('내 캐릭터', me => startObjective('ball', me)));
     button(x, H - 72, 120, 40, '뒤로', () => { S.screen = 'title'; });
   } else if (S.screen === 'help') {
     showName(false);
@@ -1923,7 +2243,9 @@ function frameMenu() {
       ['시야', '7칸 밖은 안 보임'],
       ['잡몹', '대전에서만. 잡으면 이속, 회복, 추가 체력'],
       ['토벌', '그 보너스 없음. 12단계 다음이 보스'],
-      ['2P', '방향키, 위 점프, K 좌클릭, L 우클릭']
+      ['2P', '방향키, 위 점프, K 좌클릭, L 우클릭'],
+      ['잼 그랩', '3대3. 보석을 주워 8개면 카운트. 죽으면 떨어뜨림'],
+      ['배스킷 볼', '3대3. 공을 집어 F로 던짐. 5점']
     ];
     const colW = Math.min(460, (W - x * 2 - 40) / 2);
     rows.forEach((ln, i) => {
