@@ -22,11 +22,13 @@
 'use strict';
 const DB = 'https://ground-81292-default-rtdb.asia-southeast1.firebasedatabase.app';
 const FBAPP = {
-  apiKey: '',
+  apiKey: 'AIzaSyARvGiiPkYfulQWUn9soPR0VAU-lZrzZ2M',
   authDomain: 'ground-81292.firebaseapp.com',
   databaseURL: DB,
   projectId: 'ground-81292',
-  appId: ''
+  storageBucket: 'ground-81292.firebasestorage.app',
+  messagingSenderId: '595155034841',
+  appId: '1:595155034841:web:deadecfd68d1793c7994c8'
 };
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
@@ -101,8 +103,9 @@ function saveProgress() { localStorage.setItem('ground-save', JSON.stringify(pro
 function authReady() { return typeof firebase !== 'undefined' && firebase.auth && FBAPP.apiKey; }
 function initAuth() {
   if (!authReady() || acct._init) return;
+  try { firebase.initializeApp(FBAPP); }
+  catch (e) { acct.msg = '로그인 설정을 열지 못했습니다'; return; }
   acct._init = true;
-  firebase.initializeApp(FBAPP);
   firebase.auth().onAuthStateChanged(user => {
     acctGen++;
     if (!user) {
