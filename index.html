@@ -76,9 +76,9 @@ if (!myId) { myId = Math.random().toString(36).slice(2, 10); sessionStorage.setI
 let progress = {slime:1, knight:1, slimeBoss:false, knightBoss:false};
 try { progress = Object.assign(progress, JSON.parse(localStorage.getItem('ground-save') || '{}')); } catch (e) {}
 
-const S = {screen:'title', back:'title', code:'', me:'charger', foe:'spinner', coop:false, which:'slime', pause:false, pickTitle:'', pickCb:null};
+const S = {screen:'title', back:'title', code:'', me:'charger', foe:'spinner', coop:false, which:'slime', pause:false, pickTitle:'', pickCb:null, qsize:2};
 const fb = {state:'unknown', msg:''};
-const net = {role:null, code:'', room:null, busy:false, acc:0, inAcc:0, myTeam:0, viewFresh:false, outSeq:0};
+const net = {role:null, code:'', room:null, busy:false, acc:0, inAcc:0, myTeam:0, viewFresh:false, outSeq:0, remotes:{}, remoteAt:{}, taps:{}};
 
 nameEl.value = localStorage.getItem('ground-name') || '플레이어';
 function myName() {
@@ -970,6 +970,34 @@ function resetWorld() {
   fighters = []; mobs = []; bosses = []; projs = []; zones = []; fx = []; nums = [];
   T = 0; shake = 0;
 }
+function teamSpawnX(team, index, count) {
+  if (count <= 1) return team === 0 ? 6 : BW - 8;
+  const left = [4.2, 7.6, 14.6];
+  const right = [BW - 7, BW - 10.2, 30.2];
+  const row = team === 0 ? left : right;
+  return row[index] != null ? row[index] : row[row.length - 1];
+}
+function startTeam(players) {
+  resetWorld();
+  const list = (players || []).filter(p => p && p.id);
+  const half = Math.ceil(list.length / 2);
+  const online = !!net.role;
+  fighters = list.map((p, i) => {
+    const team = i < half ? 0 : 1;
+    const f = makeFighter(p.char || 'charger', teamSpawnX(team, team === 0 ? i : i - half, half), team, p.name || '플레이어');
+    f.owner = p.id;
+    f.ai = online ? false : i !== 0;
+    return f;
+  });
+  const me = fighters.find(f => f.owner === myId);
+  game = {
+    mode:'duel', which:null, stage:0, rules:{adds:true, rewards:true},
+    addT:4.5, over:false, winTeam:null, bossing:false, local2p:false,
+    setup:{type:'duel', team:list.length > 2}
+  };
+  net.myTeam = me ? me.team : 0;
+  S.screen = 'battle'; S.pause = false; nameEl.blur();
+}
 function startDuel(c1, c2, opt = {}) {
   resetWorld();
   const p1 = makeFighter(c1, 6, 0, opt.name1 || myName());
@@ -1016,8 +1044,10 @@ function simulate(dt) {
     if (e.dead) return blankInp(e);
     if (remoteControls(e)) return takeRemote(e);
     if (e.ai) return aiInp(e);
+    if (net.role) return e.owner === myId ? humanInp(e, 'p1', cam) : blankInp(e);
     if (i === 0) return humanInp(e, 'p1', cam);
-    return humanInp(e, 'p2', cam);
+    if (game.local2p && i === 1) return humanInp(e, 'p2', cam);
+    return aiInp(e);
   });
   fighters.forEach((e, i) => updateFighter(e, inputs[i], dt));
   for (const m of mobs) updateMob(m, dt);
@@ -1051,9 +1081,9 @@ function simulate(dt) {
     }
   }
   if (game.mode === 'duel') {
-    const alive = fighters.filter(f => !f.dead);
-    if (fighters.length >= 1 && alive.length <= (fighters.length >= 2 ? 1 : 0)) {
-      game.over = true; game.winTeam = alive[0] ? alive[0].team : -1;
+    const aliveTeams = new Set(fighters.filter(f => !f.dead).map(f => f.team));
+    if (fighters.length >= 2 && aliveTeams.size <= 1) {
+      game.over = true; game.winTeam = aliveTeams.size ? [...aliveTeams][0] : -1;
     }
   } else if (fighters.every(f => f.dead)) { game.over = true; game.winTeam = -1; }
   else if (game.bossing && bosses.length && bosses.every(b => b.dead)) { game.over = true; game.winTeam = 0; }
@@ -1453,7 +1483,8 @@ function skillRows(e, x, y, keys) {
     ctx.fillRect(x, yy + 16, w * frac, 3);
   });
 }
-function playerPlate(e, side, keys) {
+function playerPlate(e, side, keys, dy) {
+  dy = dy || 0;
   const sc = 2;
   const box = heartBox(sc);
   const slots = Math.ceil(e.maxHp / 2);
@@ -1462,16 +1493,16 @@ function playerPlate(e, side, keys) {
   const portrait = 36;
   const edge = 36;
   ctx.save();
-  ctx.translate(left ? edge + portrait : W - edge - portrait, 92);
+  ctx.translate(left ? edge + portrait : W - edge - portrait, 92 + dy);
   if (!left) ctx.scale(-1, 1);
   paintFighter(e.char || 'charger', 70, e.flash > 0);
   ctx.restore();
   const hx = left ? edge + portrait * 2 + 16 : W - edge - portrait * 2 - 16 - hw;
-  drawHearts(hx, 14, e.hp, e.maxHp, e.bonus, sc);
+  drawHearts(hx, 14 + dy, e.hp, e.maxHp, e.bonus, sc);
   const rows = Math.ceil(slots / 10);
   ctx.fillStyle = charOf(e.char || 'charger').color;
-  ctx.fillRect(hx, 14 + rows * box.row - 1, 22, 2);
-  const nameY = 14 + rows * box.row + (e.bonus > 0 ? box.row + 2 : 4);
+  ctx.fillRect(hx, 14 + dy + rows * box.row - 1, 22, 2);
+  const nameY = 14 + dy + rows * box.row + (e.bonus > 0 ? box.row + 2 : 4);
   text(e.name, left ? hx : hx + hw, nameY, 13, '#eceae4', left ? 'left' : 'right');
   const tags = (e.haste > 0 ? '가속' : '') + (e.haste > 0 && e.dmgCutT > 0 ? '  ' : '') + (e.dmgCutT > 0 ? '방어' : '');
   if (tags) {
@@ -1496,16 +1527,30 @@ function visionActors() {
   }
   return fighters.filter(f => !f.dead && !f.ai && f.team === (net.myTeam || 0));
 }
+function plateKeys(e) {
+  if (!e || e.ai) return null;
+  if (net.role) return e.owner === myId ? ['좌', '우'] : null;
+  if (game && game.local2p) return e.team === 1 ? ['K', 'L'] : ['좌', '우'];
+  if (e === myFighter()) return ['좌', '우'];
+  return null;
+}
 function drawHUD(cam) {
   const me = myFighter();
-  const mineKeys = game && game.local2p && me && me.team === 1 ? ['K', 'L'] : ['좌', '우'];
-  if (me) playerPlate(me, 'left', mineKeys);
+  const allies = fighters.filter(f => me && f.team === me.team);
+  const foes = fighters.filter(f => !me || f.team !== me.team);
+  allies.sort((a, b) => (a === me ? -1 : 0) - (b === me ? -1 : 0));
+  const paintSide = (list, side) => {
+    let dy = 0;
+    list.forEach(e => {
+      const keys = plateKeys(e);
+      playerPlate(e, side, keys, dy);
+      dy += keys ? 118 : 72;
+    });
+  };
+  if (allies.length) paintSide(allies, 'left');
   if (game && game.mode === 'duel') {
-    const foe = fighters.find(f => f !== me);
-    if (foe) {
-      const foeKeys = game.local2p && !foe.ai ? (foe.team === 1 ? ['K', 'L'] : ['좌', '우']) : null;
-      playerPlate(foe, 'right', foeKeys);
-    }
+    paintSide(foes, 'right');
+    if (fighters.length > 2) text(fighters.length >= 6 ? '3대3' : '2대2', W / 2, 16, 15, '#eceae4', 'center');
   }
   if (game && game.mode === 'raid') {
     const label = (game.which === 'slime' ? '슬라임' : '기사단') + (game.bossing ? '  보스' : '  ' + game.stage);
@@ -1571,8 +1616,14 @@ function renderBattle() {
     } else {
       let title = '끝';
       if (game.mode === 'duel') {
-        const wnr = fighters.find(f => f.team === game.winTeam);
-        title = wnr ? (wnr.name + ' 승') : '무승부';
+        if (game.winTeam == null || game.winTeam < 0) title = '무승부';
+        else if (fighters.length > 2) {
+          const mine = myFighter();
+          title = mine && mine.team === game.winTeam ? '우리 팀 승' : '상대 팀 승';
+        } else {
+          const wnr = fighters.find(f => f.team === game.winTeam);
+          title = wnr ? (wnr.name + ' 승') : '무승부';
+        }
       } else title = game.winTeam === 0 ? '토벌 성공' : '토벌 실패';
       text(title, x, y, 26, '#eceae4');
       y += 48;
@@ -1597,13 +1648,18 @@ function renderBattle() {
 
 function leaveMatch() {
   if (net.code) {
-    const path = net.role === 'guest' ? '/rooms/' + net.code + '/guest' : '/rooms/' + net.code;
-    fetch(DB + path + '.json', {method:'DELETE'}).catch(() => {});
-    if (net.role === 'guest') fetch(DB + '/rooms/' + net.code + '/guestIn.json', {method:'DELETE'}).catch(() => {});
+    const code = net.code;
+    if (net.role === 'host') fetch(DB + '/rooms/' + code + '.json', {method:'DELETE'}).catch(() => {});
+    else if (net.role === 'guest') {
+      fetch(DB + '/rooms/' + code + '/in/' + myId + '.json', {method:'DELETE'}).catch(() => {});
+      fetch(DB + '/rooms/' + code + '/players/' + myId + '.json', {method:'DELETE'}).catch(() => {});
+      if (net.room && net.room.guest && net.room.guest.id === myId) fetch(DB + '/rooms/' + code + '/guest.json', {method:'DELETE'}).catch(() => {});
+    }
   }
   fetch(DB + '/queue/' + myId + '.json', {method:'DELETE'}).catch(() => {});
   closeStream();
-  net.role = null; net.code = ''; net.room = null; net.remote = null; net.playing = false; net.tapReady = false; net.gotAt = 0;
+  net.role = null; net.code = ''; net.room = null; net.remote = null; net.remotes = {}; net.remoteAt = {}; net.taps = {};
+  net.playing = false; net.tapReady = false; net.gotAt = 0;
   game = null; S.pause = false; S.screen = 'title';
 }
 function retryRaid() {
@@ -1844,14 +1900,16 @@ function frameMenu() {
     showName(true);
     text('매칭', x, 88, 26, '#eceae4');
     text(charOf(S.me).name, x, 126, 14, '#8d8a82');
-    button(x, 168, 260, 40, '대전', () => startQueue('duel', null));
-    button(x, 212, 260, 40, '슬라임 토벌', () => startQueue('raid', 'slime'));
-    button(x, 256, 260, 40, '검은 기사단', () => startQueue('raid', 'knight'));
+    button(x, 168, 260, 40, '1대1', () => startQueue('duel', null, 2));
+    button(x, 212, 260, 40, '2대2', () => startQueue('duel', null, 4));
+    button(x, 256, 260, 40, '3대3', () => startQueue('duel', null, 6));
+    button(x, 312, 260, 40, '슬라임 토벌', () => startQueue('raid', 'slime', 2));
+    button(x, 356, 260, 40, '검은 기사단', () => startQueue('raid', 'knight', 2));
     button(x, H - 72, 120, 40, '뒤로', () => { S.screen = 'pvp'; });
   } else if (S.screen === 'queue') {
     showName(true);
     text('찾는 중', x, H * 0.32, 26, '#eceae4');
-    text(charOf(S.me).name + (S.qmode === 'raid' ? '  토벌' : '  대전') + (fb.state === 'ok' ? '' : '  다시 연결 중'), x, H * 0.32 + 40, 14, '#8d8a82');
+    text(charOf(S.me).name + '  ' + queueLabel() + (fb.state === 'ok' ? '' : '  다시 연결 중'), x, H * 0.32 + 40, 14, '#8d8a82');
     button(x, H * 0.32 + 80, 160, 40, '취소', () => cancelQueue());
   } else if (S.screen === 'join') {
     showName(true);
@@ -1863,32 +1921,59 @@ function frameMenu() {
   } else if (S.screen === 'lobby') {
     showName(true);
     const room = net.room || {};
-    text(net.code || '', x, 88, 26, '#eceae4');
-    text('이 코드를 상대에게 알려 주세요', x, 118, 13, '#8d8a82');
-    const host = room.host || {}, guest = room.guest;
-    text('방장  ' + (host.name || '...') + '  ' + charOf(host.char || 'charger').name, x, 146, 14, '#eceae4');
-    text(guest ? ('상대  ' + guest.name + '  ' + charOf(guest.char || 'charger').name) : '상대를 기다리는 중', x, 168, 14, '#8d8a82');
-    const mine = net.role === 'guest' ? guest : host;
-    text('캐릭터', x, 196, 13, '#8d8a82');
-    CHARS.forEach((c, i) => {
-      button(x + i * 78, 208, 74, 34, c.name, () => lobbyChar(c.id), {on:mine && mine.char === c.id, fs:13, align:'center', pad:0});
-    });
+    const size = roomNeed(room);
+    const roster = orderedPlayers(room);
+    text(net.code || '', x, 56, 26, '#eceae4');
+    text(size > 2 ? '이 코드를 팀원에게 알려 주세요' : '이 코드를 상대에게 알려 주세요', x, 88, 13, '#8d8a82');
+    let y = 112;
     if (net.role === 'host') {
-      button(x, 264, 160, 38, '대전', () => patchRoom({mode:'duel'}), {on:room.mode !== 'raid'});
-      button(x + 168, 264, 160, 38, '토벌', () => patchRoom({mode:'raid'}), {on:room.mode === 'raid'});
-      if (room.mode === 'raid') {
-        button(x, 310, 160, 36, '슬라임', () => patchRoom({raid:'slime'}), {on:room.raid !== 'knight'});
-        button(x + 168, 310, 160, 36, '기사단', () => patchRoom({raid:'knight'}), {on:room.raid === 'knight'});
-        text('단계 ' + (room.stage || 1), x, 362, 14, '#eceae4');
-        button(x + 80, 354, 36, 32, '−', () => patchRoom({stage:Math.max(1, (room.stage || 1) - 1)}), {align:'center', pad:0});
-        button(x + 122, 354, 36, 32, '+', () => patchRoom({stage:Math.min(12, (room.stage || 1) + 1)}), {align:'center', pad:0});
-      }
-      button(x, 412, 160, 40, '시작', () => startOnline(), {off:!guest});
-    } else {
-      text(room.mode === 'raid' ? ((room.raid === 'knight' ? '기사단 ' : '슬라임 ') + (room.stage || 1)) : '대전', x, 270, 16, '#eceae4');
-      text('방장이 시작하면 들어갑니다.', x, 298, 14, '#8d8a82');
+      button(x, y, 100, 34, '1대1', () => setRoomSize(2), {on:size === 2 && room.mode !== 'raid'});
+      button(x + 108, y, 100, 34, '2대2', () => setRoomSize(4), {on:size === 4});
+      button(x + 216, y, 100, 34, '3대3', () => setRoomSize(6), {on:size === 6});
+      y += 44;
     }
-    button(x, H - 72, 120, 40, '나가기', () => leaveMatch());
+    text('왼쪽', x, y, 12, '#8d8a82');
+    text('오른쪽', x + 240, y, 12, '#8d8a82');
+    y += 18;
+    const half = size / 2;
+    for (let i = 0; i < size; i++) {
+      const team = i < half ? 0 : 1;
+      const row = team === 0 ? i : i - half;
+      const p = roster[i];
+      const label = p ? ((p.name || '플레이어') + '  ' + charOf(p.char || 'charger').name) : '빈 자리';
+      text(label, x + team * 240, y + row * 22, 14, p ? '#eceae4' : '#6e6b64');
+    }
+    y += half * 22 + 10;
+    const mine = roster.find(p => p.id === myId) || (net.role === 'host' ? room.host : null);
+    text('캐릭터', x, y, 13, '#8d8a82');
+    y += 16;
+    CHARS.forEach((c, i) => {
+      button(x + i * 72, y, 68, 32, c.name, () => lobbyChar(c.id), {on:mine && mine.char === c.id, fs:12, align:'center', pad:0});
+    });
+    y += 44;
+    if (net.role === 'host') {
+      button(x, y, 120, 34, '대전', () => setRoomSize(room.mode === 'raid' ? 2 : size), {on:room.mode !== 'raid'});
+      button(x + 128, y, 120, 34, '토벌', () => setRaidMode(), {on:room.mode === 'raid'});
+      y += 42;
+      if (room.mode === 'raid') {
+        button(x, y, 120, 32, '슬라임', () => patchRoom({raid:'slime'}), {on:room.raid !== 'knight'});
+        button(x + 128, y, 120, 32, '기사단', () => patchRoom({raid:'knight'}), {on:room.raid === 'knight'});
+        text('단계 ' + (room.stage || 1), x + 264, y + 8, 14, '#eceae4');
+        button(x + 340, y, 32, 32, '−', () => patchRoom({stage:Math.max(1, (room.stage || 1) - 1)}), {align:'center', pad:0});
+        button(x + 376, y, 32, 32, '+', () => patchRoom({stage:Math.min(12, (room.stage || 1) + 1)}), {align:'center', pad:0});
+        y += 42;
+      }
+      const ready = roster.length >= size;
+      button(x, y, 160, 40, '시작', () => startOnline(), {off:!ready});
+      if (!ready) text((size - roster.length) + '명 더 필요', x + 176, y + 12, 13, '#8d8a82');
+    } else {
+      const modeText = room.mode === 'raid'
+        ? ((room.raid === 'knight' ? '기사단 ' : '슬라임 ') + (room.stage || 1))
+        : (size === 6 ? '3대3' : size === 4 ? '2대2' : '대전');
+      text(modeText, x, y, 16, '#eceae4');
+      text('방장이 시작하면 들어갑니다.', x, y + 28, 14, '#8d8a82');
+    }
+    button(x, H - 56, 120, 40, '나가기', () => leaveMatch());
   } else if (S.screen === 'stages') {
     showName(false);
     text('토벌', x, 48, 26, '#eceae4');
@@ -1953,6 +2038,42 @@ function makeCode() {
   for (let i = 0; i < 4; i++) s += a[Math.floor(Math.random() * a.length)];
   return s;
 }
+function queueLabel() {
+  if (S.qmode === 'raid') return '토벌';
+  if (S.qsize === 6) return '3대3';
+  if (S.qsize === 4) return '2대2';
+  return '1대1';
+}
+function roomNeed(room) {
+  if (!room || room.mode === 'raid') return 2;
+  return room.size || 2;
+}
+function playerList(room) {
+  if (!room) return [];
+  const raw = room.players;
+  let list = [];
+  if (Array.isArray(raw)) list = raw.filter(Boolean);
+  else if (raw && typeof raw === 'object') list = Object.values(raw);
+  if (room.host && room.host.id && !list.some(p => p.id === room.host.id)) list.unshift(room.host);
+  if (room.guest && room.guest.id && !list.some(p => p.id === room.guest.id)) list.push(room.guest);
+  const seen = new Set();
+  return list.filter(p => p && p.id && !seen.has(p.id) && seen.add(p.id));
+}
+function orderedPlayers(room) {
+  const all = playerList(room);
+  const hostId = (room.host && room.host.id) || (all[0] && all[0].id);
+  const host = all.find(p => p.id === hostId) || room.host;
+  const rest = all.filter(p => p.id !== hostId).sort((a, b) => (a.ts || 0) - (b.ts || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const list = [];
+  if (host && host.id) list.push(Object.assign({}, host, {slot:0}));
+  rest.forEach((p, i) => list.push(Object.assign({}, p, {slot:i + 1})));
+  return list;
+}
+function seatMap(list) {
+  const players = {};
+  list.forEach(p => { players[p.id] = p; });
+  return players;
+}
 async function makeRoom() {
   if (fb.state !== 'ok') { await pingFB(); if (fb.state !== 'ok') return; }
   try {
@@ -1961,7 +2082,8 @@ async function makeRoom() {
       code = makeCode();
       const exists = await fbReq('GET', '/rooms/' + code);
       if (exists) continue;
-      room = {host:{id:myId, name:myName(), char:S.me || 'charger'}, guest:null, mode:'duel', raid:'slime', stage:1, status:'lobby', ping:Date.now()};
+      const me = {id:myId, name:myName(), char:S.me || 'charger', slot:0, ts:Date.now()};
+      room = {host:me, guest:null, players:seatMap([me]), size:2, mode:'duel', raid:'slime', stage:1, status:'lobby', ping:Date.now()};
       await fbReq('PUT', '/rooms/' + code, room);
       break;
     }
@@ -1976,12 +2098,30 @@ async function tryJoin() {
   try {
     const room = await fbReq('GET', '/rooms/' + code);
     if (!room || !room.host) { S.joinErr = '없는 방입니다'; return; }
-    if (room.guest && room.guest.id !== myId) { S.joinErr = '이미 가득 찬 방입니다'; return; }
+    if (room.status === 'play') { S.joinErr = '이미 시작된 방입니다'; return; }
     if (room.host.id === myId) { S.joinErr = '내가 만든 방입니다'; return; }
-    const guest = {id:myId, name:myName(), char:S.me || 'charger'};
-    await fbReq('PATCH', '/rooms/' + code, {guest});
-    room.guest = guest;
-    net.code = code; net.role = 'guest'; net.room = room; S.screen = 'lobby';
+    const size = roomNeed(room);
+    if (orderedPlayers(room).some(p => p.id === myId)) {
+      net.code = code; net.role = 'guest'; net.room = room; S.screen = 'lobby';
+      return;
+    }
+    if (orderedPlayers(room).length >= size) { S.joinErr = '이미 가득 찬 방입니다'; return; }
+    const me = {id:myId, name:myName(), char:S.me || 'charger', ts:Date.now()};
+    await fbReq('PUT', '/rooms/' + code + '/players/' + myId, me);
+    const again = await fbReq('GET', '/rooms/' + code);
+    const mine = orderedPlayers(again).findIndex(p => p.id === myId);
+    if (mine < 0 || mine >= roomNeed(again)) {
+      await fbReq('DELETE', '/rooms/' + code + '/players/' + myId);
+      S.joinErr = '이미 가득 찬 방입니다';
+      return;
+    }
+    me.slot = mine;
+    await fbReq('PUT', '/rooms/' + code + '/players/' + myId, me);
+    if (mine === 1) await fbReq('PUT', '/rooms/' + code + '/guest', me);
+    again.players = again.players || {};
+    again.players[myId] = me;
+    if (mine === 1) again.guest = me;
+    net.code = code; net.role = 'guest'; net.room = again; S.screen = 'lobby';
   } catch (e) { fbFail(e); S.joinErr = '연결 실패'; }
 }
 async function patchRoom(partial) {
@@ -1989,22 +2129,46 @@ async function patchRoom(partial) {
   Object.assign(net.room, partial);
   try { await fbReq('PATCH', '/rooms/' + net.code, partial); } catch (e) { fbFail(e); }
 }
+async function writeSeats(list, extra) {
+  const players = seatMap(list);
+  const guest = list[1] || null;
+  const partial = Object.assign({players, guest}, extra || {});
+  Object.assign(net.room, partial);
+  await fbReq('PATCH', '/rooms/' + net.code, partial);
+}
+async function setRoomSize(size) {
+  if (net.role !== 'host' || !net.room) return;
+  const kept = orderedPlayers(net.room).slice(0, size);
+  try { await writeSeats(kept, {size, mode:'duel'}); } catch (e) { fbFail(e); }
+}
+async function setRaidMode() {
+  if (net.role !== 'host' || !net.room) return;
+  const kept = orderedPlayers(net.room).slice(0, 2);
+  try { await writeSeats(kept, {size:2, mode:'raid'}); } catch (e) { fbFail(e); }
+}
 async function lobbyChar(id) {
   if (!net.room || !net.code) return;
-  if (net.role === 'host') {
-    net.room.host = Object.assign({}, net.room.host, {char:id, name:myName()});
-    try { await fbReq('PATCH', '/rooms/' + net.code + '/host', net.room.host); } catch (e) { fbFail(e); }
-  } else {
-    const g = {id:myId, name:myName(), char:id};
-    net.room.guest = g;
-    try { await fbReq('PATCH', '/rooms/' + net.code, {guest:g}); } catch (e) { fbFail(e); }
-  }
+  const list = orderedPlayers(net.room);
+  const i = list.findIndex(p => p.id === myId);
+  if (i < 0) return;
+  list[i] = Object.assign({}, list[i], {char:id, name:myName()});
+  try {
+    if (net.role === 'host') await writeSeats(list, {host:list[0]});
+    else {
+      await fbReq('PUT', '/rooms/' + net.code + '/players/' + myId, list[i]);
+      if (i === 1) await fbReq('PUT', '/rooms/' + net.code + '/guest', list[i]);
+      net.room.players = seatMap(list);
+      if (i === 1) net.room.guest = list[i];
+    }
+  } catch (e) { fbFail(e); }
 }
 async function startOnline() {
   if (!net.code) return;
   try {
     const room = await fbReq('GET', '/rooms/' + net.code);
-    if (!room || !room.guest) return;
+    if (!room) return;
+    const list = orderedPlayers(room);
+    if (list.length < roomNeed(room)) return;
     net.room = room;
     room.status = 'play';
     await fbReq('PATCH', '/rooms/' + net.code, {status:'play', ping:Date.now()});
@@ -2021,38 +2185,42 @@ function restartOnline() {
 }
 function beginOnlineGame(room) {
   if (net.playing) return;
-  const h = room.host || {}, g = room.guest || {};
+  net.role = net.role || 'host';
+  const list = orderedPlayers(room);
+  const h = list[0] || room.host || {};
+  const g = list[1] || room.guest || {};
   if (room.mode === 'raid') {
     startRaid(h.char || 'charger', room.raid || 'slime', room.stage || 1, false, {name1:h.name, p2char:g.char || 'charger', name2:g.name});
     if (fighters[1]) fighters[1].team = 0;
-  } else {
-    startDuel(h.char || 'charger', g.char || 'spinner', {ai:false, name1:h.name || '방장', name2:g.name || '상대', myTeam: net.role === 'guest' ? 1 : 0});
-    fighters.forEach(f => { f.ai = false; });
-  }
-  if (fighters[0]) fighters[0].owner = h.id || myId;
-  if (fighters[1]) fighters[1].owner = g.id || null;
-  net.role = net.role || 'host';
+    if (fighters[0]) fighters[0].owner = h.id || myId;
+    if (fighters[1]) fighters[1].owner = g.id || null;
+    net.myTeam = 0;
+  } else startTeam(list);
   net.playing = true;
   net.remote = null;
+  net.remotes = {};
+  net.remoteAt = {};
+  net.taps = {};
   net.tapReady = false;
   net.gotAt = 0;
   net.liveAfter = Date.now();
   net.snapAge = 0;
-  if (room.mode === 'raid') net.myTeam = 0;
   closeStream();
   if (net.role === 'guest') openStateStream();
-  else openGuestStream();
+  else openInputStream();
 }
 function closeStream() {
   if (net.es) { net.es.close(); net.es = null; }
 }
-function acceptRemote(inp) {
-  if (!inp || typeof inp !== 'object') return;
-  const prev = net.remote;
+function acceptOne(id, inp) {
+  if (!id || !inp || typeof inp !== 'object') return;
+  const prev = net.remotes[id];
   if (prev && inp.seq != null && prev.seq != null && inp.seq < prev.seq) return;
+  if (!inp.id) inp.id = id;
+  net.remotes[id] = inp;
+  net.remoteAt[id] = Date.now();
   net.remote = inp;
   net.gotAt = Date.now();
-  net.lastSeq = inp.seq;
 }
 function readStream(ev) {
   let msg = null;
@@ -2064,11 +2232,30 @@ function readStream(ev) {
   }
   return msg.data;
 }
-function openGuestStream() {
-  const es = new EventSource(DB + '/rooms/' + net.code + '/guestIn.json');
-  const take = (ev) => { const data = readStream(ev); if (data) acceptRemote(data); };
-  es.addEventListener('put', take);
-  es.addEventListener('patch', take);
+function ingestInputs(ev) {
+  let msg = null;
+  try { msg = JSON.parse(ev.data); } catch (e) { return; }
+  if (!msg) return;
+  const path = msg.path || '/';
+  if (path === '/') {
+    net.remotes = {};
+    net.remoteAt = {};
+    if (msg.data && typeof msg.data === 'object') Object.entries(msg.data).forEach(([id, inp]) => acceptOne(id, inp));
+    return;
+  }
+  const id = path.replace(/^\//, '').split('/')[0];
+  if (!id || msg.data == null) return;
+  if (path.replace(/^\//, '').indexOf('/') < 0) acceptOne(id, msg.data);
+  else {
+    const cur = Object.assign({}, net.remotes[id] || {});
+    cur[path.replace(/^\//, '').split('/')[1]] = msg.data;
+    acceptOne(id, cur);
+  }
+}
+function openInputStream() {
+  const es = new EventSource(DB + '/rooms/' + net.code + '/in.json');
+  es.addEventListener('put', ingestInputs);
+  es.addEventListener('patch', ingestInputs);
   net.es = es;
 }
 function openStateStream() {
@@ -2080,19 +2267,12 @@ function openStateStream() {
   net.es = es;
 }
 function remoteControls(e) {
-  if (net.role !== 'host' || !e || e.ai) return false;
-  const rid = net.remote && net.remote.id;
-  if (rid && e.owner === rid) return true;
-  if (!rid && e.owner && e.owner !== myId) return true;
-  if (!e.owner) {
-    const mine = fighters.find(f => f.owner === myId) || fighters[0];
-    return e !== mine;
-  }
-  return false;
+  return net.role === 'host' && !!e && !e.ai && !!e.owner && e.owner !== myId;
 }
 function ticketRaid(v) { return (v && v.raid) || null; }
+function ticketSize(v) { return (v && v.size) || 2; }
 function myTicket() {
-  const body = {name:myName(), char:S.me || 'charger', mode:S.qmode, ts:Date.now()};
+  const body = {name:myName(), char:S.me || 'charger', mode:S.qmode, size:S.qsize || 2, ts:Date.now()};
   if (S.qraid) body.raid = S.qraid;
   return body;
 }
@@ -2100,10 +2280,11 @@ function waitingTicket(v, id) {
   if (!v || id === myId || v.room) return false;
   if (v.mode !== S.qmode) return false;
   if (ticketRaid(v) !== (S.qraid || null)) return false;
+  if (ticketSize(v) !== (S.qsize || 2)) return false;
   return Date.now() - (v.ts || 0) < 6000;
 }
-async function startQueue(mode, raid) {
-  S.qmode = mode; S.qraid = raid || null; S.screen = 'queue'; net.role = null; net.acc = 0; net.listed = false;
+async function startQueue(mode, raid, size) {
+  S.qmode = mode; S.qraid = raid || null; S.qsize = size || 2; S.screen = 'queue'; net.role = null; net.acc = 0; net.listed = false;
   try {
     await fbReq('PUT', '/queue/' + myId, myTicket());
     net.listed = true;
@@ -2135,21 +2316,25 @@ async function pollQueue() {
       return;
     }
     const others = Object.entries(all).filter(([id, v]) => waitingTicket(v, id));
-    others.sort((a, b) => a[0] < b[0] ? -1 : 1);
-    if (others.length && myId < others[0][0]) {
-      const foeId = others[0][0];
-      const foe = await fbReq('GET', '/queue/' + foeId);
-      if (waitingTicket(foe, foeId)) {
+    const size = S.qsize || 2;
+    const ids = [myId, ...others.map(([id]) => id)].sort();
+    if (ids.length >= size && ids[0] === myId) {
+      const members = [{id:myId, name:myName(), char:S.me || 'charger', slot:0, ts:Date.now()}];
+      let ok = true;
+      for (const id of ids.slice(1, size)) {
+        const foe = await fbReq('GET', '/queue/' + id);
+        if (!waitingTicket(foe, id)) { ok = false; break; }
+        members.push({id, name:foe.name, char:foe.char || 'charger', slot:members.length, ts:Date.now()});
+      }
+      if (ok && members.length === size) {
         const code = makeCode();
         const room = {
-          host:{id:myId, name:myName(), char:S.me || 'charger'},
-          guest:{id:foeId, name:foe.name, char:foe.char || 'charger'},
+          host:members[0], guest:members[1], players:seatMap(members), size,
           mode:S.qmode, raid:S.qraid || 'slime', stage:1,
           status:S.qmode === 'duel' ? 'play' : 'lobby', ping:Date.now()
         };
         await fbReq('PUT', '/rooms/' + code, room);
-        await fbReq('PUT', '/queue/' + foeId + '/room', code);
-        await fbReq('PUT', '/queue/' + myId + '/room', code);
+        for (const m of members) await fbReq('PUT', '/queue/' + m.id + '/room', code);
         enterMatched(code, room);
         return;
       }
@@ -2195,25 +2380,27 @@ function watchGuestTaps() {
   netTap.wasL = l; netTap.wasR = r; netTap.wasJ = j;
 }
 function takeRemote(e) {
-  const r = net.remote;
-  const fresh = !!(r && net.gotAt && Date.now() - net.gotAt < 1500);
+  const id = e.owner;
+  const r = id && net.remotes[id];
+  const at = id && net.remoteAt[id];
+  const fresh = !!(r && at && Date.now() - at < 1500);
   const inp = {left:false, right:false, jump:false, lmb:false, rmb:false, aimX:e.aimX || e.x + (e.facing || 1) * 2, aimY:e.aimY || e.y + 1};
   if (!fresh) return finalizeInp(e, inp);
-  if (!net.tapReady) {
-    netTap.ackL = r.tapL || 0; netTap.ackR = r.tapR || 0; netTap.ackJ = r.tapJ || 0;
-    netTap.gapL = netTap.gapR = netTap.gapJ = false;
-    net.tapReady = true;
+  const bag = net.taps[id] || (net.taps[id] = {ackL:0, ackR:0, ackJ:0, gapL:false, gapR:false, gapJ:false, ready:false});
+  if (!bag.ready) {
+    bag.ackL = r.tapL || 0; bag.ackR = r.tapR || 0; bag.ackJ = r.tapJ || 0;
+    bag.ready = true;
   }
   inp.left = !!r.left; inp.right = !!r.right; inp.jump = !!r.jump;
   inp.lmb = !!r.lmb; inp.rmb = !!r.rmb;
   if (typeof r.aimX === 'number') inp.aimX = r.aimX;
   if (typeof r.aimY === 'number') inp.aimY = r.aimY;
   const missed = (count, ack, gap, held) => {
-    if (held) { netTap[ack] = count || netTap[ack]; netTap[gap] = false; return false; }
-    if (netTap[gap]) { netTap[gap] = false; return false; }
-    if ((count || 0) <= netTap[ack]) return false;
-    netTap[ack]++;
-    netTap[gap] = (count - netTap[ack]) > 0;
+    if (held) { bag[ack] = count || bag[ack]; bag[gap] = false; return false; }
+    if (bag[gap]) { bag[gap] = false; return false; }
+    if ((count || 0) <= bag[ack]) return false;
+    bag[ack]++;
+    bag[gap] = (count - bag[ack]) > 0;
     return true;
   };
   if (missed(r.tapL, 'ackL', 'gapL', inp.lmb)) inp.lmb = true;
@@ -2230,7 +2417,7 @@ function sendInput(cam) {
     id:myId, tapL:netTap.l, tapR:netTap.r, tapJ:netTap.j, seq:++net.outSeq,
     aimX:+w.x.toFixed(2), aimY:+w.y.toFixed(2), ts:Date.now()
   };
-  fbReq('PUT', '/rooms/' + net.code + '/guestIn', body).catch(() => {});
+  fbReq('PUT', '/rooms/' + net.code + '/in/' + myId, body).catch(() => {});
 }
 function applySnap(s) {
   if (!s) return;
@@ -2247,20 +2434,30 @@ function applySnap(s) {
   }
   net.snapAge = 0;
 }
+function exitRoom() {
+  closeStream();
+  net.role = null; net.code = ''; net.room = null; net.playing = false; net.remote = null;
+  S.screen = 'pvp';
+}
 async function pollOnline() {
   if (!net.code || net.busy) return;
   net.busy = true;
   try {
     if (S.screen === 'lobby') {
       const room = await fbReq('GET', '/rooms/' + net.code);
-      if (room) {
-        net.room = room;
-        if (room.status === 'play') beginOnlineGame(room);
-      }
+      if (!room || !room.host) { exitRoom(); return; }
+      net.room = room;
+      if (net.role === 'host') {
+        const size = roomNeed(room);
+        const kept = orderedPlayers(room).slice(0, size);
+        const raw = playerList(room);
+        if (raw.length !== kept.length) await writeSeats(kept, {size: room.mode === 'raid' ? 2 : (room.size || size)});
+      } else if (!orderedPlayers(room).some(p => p.id === myId)) { exitRoom(); return; }
+      if (room.status === 'play') beginOnlineGame(net.room);
     } else if (S.screen === 'battle' && net.role === 'host') {
       publishState();
-      const inp = await fbReq('GET', '/rooms/' + net.code + '/guestIn');
-      if (inp) acceptRemote(inp);
+      const all = await fbReq('GET', '/rooms/' + net.code + '/in') || {};
+      if (all && typeof all === 'object') Object.entries(all).forEach(([id, inp]) => acceptOne(id, inp));
     } else if (S.screen === 'battle' && net.role === 'guest') {
       const st = await fbReq('GET', '/rooms/' + net.code + '/state');
       if (st) applySnap(st);
@@ -2326,7 +2523,7 @@ function loop(now) {
   requestAnimationFrame(loop);
 }
 
-window.G = {get fighters(){return fighters;}, get game(){return game;}, hurt, startDuel, DB};
+window.G = {get fighters(){return fighters;}, get game(){return game;}, hurt, startDuel, startTeam, DB};
 requestAnimationFrame(loop);
 })();
 </script>
