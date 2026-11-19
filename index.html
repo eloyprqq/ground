@@ -998,7 +998,7 @@ function startTeam(players) {
     f.owner = p.id;
     f.slot = team === 0 ? i : i - half;
     f.gems = 0;
-    f.ai = online ? false : i !== 0;
+    f.ai = p.ai ? true : (online ? false : i !== 0);
     return f;
   });
   const me = fighters.find(f => f.owner === myId);
@@ -1190,11 +1190,39 @@ function updateGems(dt) {
     game.leadT = 12;
   }
 }
+function touchesHoop(f, hoop) {
+  const left = hoop.x - 0.75, right = hoop.x + 0.75;
+  const bottom = hoop.y - 0.15, top = hoop.y + 0.55;
+  return f.x < right && f.x + f.w > left && f.y < top && f.y + f.h > bottom;
+}
+function scoreHoop(hoop, who) {
+  game.score[hoop.team] = (game.score[hoop.team] || 0) + 1;
+  if (who) who.dunking = true;
+  nums.push({x:hoop.x, y:hoop.y + 0.5, vy:1.6, life:0.8, text:'+1', color:'#eceae4'});
+  if (game.ball) {
+    if (who && game.ball.holder === who) game.ball.holder = null;
+    game.ball.x = BW / 2;
+    game.ball.y = 7;
+    game.ball.vx = 0;
+    game.ball.vy = 2;
+    game.ball.lock = 0.8;
+    game.ball.holder = null;
+  }
+  if (game.score[hoop.team] >= game.need) { game.over = true; game.winTeam = hoop.team; }
+}
 function updateBall(dt) {
   const b = game.ball;
   if (!b) return;
   b.lock = Math.max(0, (b.lock || 0) - dt);
   for (const f of fighters) f.throwCd = Math.max(0, (f.throwCd || 0) - dt);
+  for (const f of fighters) {
+    if (f.dead) { f.dunking = false; continue; }
+    const hoop = HOOPS.find(h => h.team === f.team && touchesHoop(f, h));
+    if (hoop) {
+      if (!f.dunking) { scoreHoop(hoop, f); return; }
+    } else f.dunking = false;
+  }
+  if (game.over) return;
   const holder = b.holder;
   if (holder && !holder.dead) {
     if (holder._throw || (!holder.ai && holder._fEdge)) throwBall(holder);
@@ -2245,7 +2273,7 @@ function frameMenu() {
       ['토벌', '그 보너스 없음. 12단계 다음이 보스'],
       ['2P', '방향키, 위 점프, K 좌클릭, L 우클릭'],
       ['잼 그랩', '3대3. 보석을 주워 8개면 카운트. 죽으면 떨어뜨림'],
-      ['배스킷 볼', '3대3. 공을 집어 F로 던짐. 5점']
+      ['배스킷 볼', '3대3. 공 집어 F로 던짐. 골대에 몸이 닿아도 1점. 5점']
     ];
     const colW = Math.min(460, (W - x * 2 - 40) / 2);
     rows.forEach((ln, i) => {
@@ -2376,7 +2404,7 @@ function frameMenu() {
       }
       const ready = roster.length >= size;
       button(x, y, 160, 40, '시작', () => startOnline(), {off:!ready});
-      if (!ready) text((size - roster.length) + '명 더 필요', x + 176, y + 12, 13, '#8d8a82');
+      if (!ready) button(x + 176, y, 168, 40, 'AI로 채우기', () => fillWithAi());
     } else {
       const modeText = room.mode === 'raid'
         ? ((room.raid === 'knight' ? '기사단 ' : '슬라임 ') + (room.stage || 1))
@@ -2547,6 +2575,17 @@ async function writeSeats(list, extra) {
   Object.assign(net.room, partial);
   await fbReq('PATCH', '/rooms/' + net.code, partial);
 }
+async function fillWithAi() {
+  if (net.role !== 'host' || !net.room || !net.code) return;
+  const size = roomNeed(net.room);
+  const list = orderedPlayers(net.room).slice(0, size);
+  if (list.length >= size) return;
+  while (list.length < size) {
+    const char = rollChar();
+    list.push({id:'ai' + Math.random().toString(36).slice(2, 8), name:'AI', char, ai:true, ts:Date.now() + list.length, slot:list.length});
+  }
+  try { await writeSeats(list, {size: net.room.mode === 'raid' ? 2 : (net.room.size || size)}); } catch (e) { fbFail(e); }
+}
 async function setRoomSize(size) {
   if (net.role !== 'host' || !net.room) return;
   const kept = orderedPlayers(net.room).slice(0, size);
@@ -2602,9 +2641,12 @@ function beginOnlineGame(room) {
   const g = list[1] || room.guest || {};
   if (room.mode === 'raid') {
     startRaid(h.char || 'charger', room.raid || 'slime', room.stage || 1, false, {name1:h.name, p2char:g.char || 'charger', name2:g.name});
-    if (fighters[1]) fighters[1].team = 0;
     if (fighters[0]) fighters[0].owner = h.id || myId;
-    if (fighters[1]) fighters[1].owner = g.id || null;
+    if (fighters[1]) {
+      fighters[1].team = 0;
+      fighters[1].owner = g.id || null;
+      fighters[1].ai = !!g.ai;
+    }
     net.myTeam = 0;
   } else startTeam(list);
   net.playing = true;
@@ -2761,7 +2803,7 @@ function serF(e) {
     id:e.id, kind:e.kind, char:e.char || null, sub:e.sub || null, team:e.team, name:e.name || '',
     x:+e.x.toFixed(2), y:+e.y.toFixed(2), w:e.w, h:e.h, vx:+(e.vx || 0).toFixed(2), vy:+(e.vy || 0).toFixed(2),
     hp:Math.max(0, Math.round(e.hp)), maxHp:e.maxHp, bonus:e.bonus || 0, facing:e.facing || 1,
-    dead:!!e.dead, flash:e.flash > 0 ? 0.1 : 0, onGround:!!e.onGround, tint:e.tint || null, owner:e.owner || null,
+    dead:!!e.dead, flash:e.flash > 0 ? 0.1 : 0, onGround:!!e.onGround, tint:e.tint || null, owner:e.owner || null, ai:!!e.ai,
     anchored:e.anchored ? {x:+e.anchored.x.toFixed(2), y:+e.anchored.y.toFixed(2)} : null,
     cloneA:e.cloneA || 0, clones:e.clones || 1, holdL:e.holdL || 0, holdR:e.holdR || 0, spinT:e.spinT || 0,
     aimX:+(e.aimX == null ? e.x : e.aimX).toFixed(2), aimY:+(e.aimY == null ? e.y : e.aimY).toFixed(2),
