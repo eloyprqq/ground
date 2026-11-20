@@ -758,7 +758,7 @@ function castGadget(e) {
     if (net.role !== 'guest') {
       for (let i = 0; i < 3; i++) {
         sums.push({
-          id:++NID, kind:'sum', who:e.owner || '', owner:e.id, team:e.team, slot:i,
+          id:++NID, kind:'sum', char:'shifter', who:e.owner || '', owner:e.id, team:e.team, slot:i,
           x:CXx(e), y:e.y + 0.8, w:0.72, h:0.72, hp:2, maxHp:2, dead:false,
           vx:0, vy:0, flash:0, iframe:0
         });
@@ -940,6 +940,19 @@ function tickSums(dt) {
     s.x = CXx(owner) + Math.cos(s.ang) * rx - s.w / 2;
     s.y = owner.y + 0.85 + Math.sin(s.ang) * ry;
     s.facing = Math.cos(s.ang) >= 0 ? 1 : -1;
+    if (s.char === 'shifter' && net.role !== 'guest') {
+      if (s.soul == null) s.soul = ((s.slot || 0) % 5) * 0.1;
+      s.soul += step;
+      if (s.soul >= 0.5) {
+        s.soul -= 0.5;
+        const x = CXx(s), y = CYy(s);
+        const t = nearestTo(x, y, s.team);
+        let dx = s.facing || 1, dy = 0;
+        if (t) { dx = CXx(t) - x; dy = CYy(t) - y; }
+        const len = Math.hypot(dx, dy) || 1;
+        spawnProj({type:'soul', x, y, vx:dx / len * 7.2, vy:dy / len * 7.2, r:0.16, dmg:1, life:2.3, team:s.team, owner:owner.id, who:'sum', pierce:true, homing:1.5, grav:0, meter:0});
+      }
+    }
   }
   sums = sums.filter(s => !s.dead);
 }
@@ -4338,7 +4351,7 @@ function publishState() {
   const snap = {
     t:Date.now(),
     fighters:fighters.map(serF), mobs:mobs.filter(m => !m.dead).map(serF), bosses:bosses.map(serF),
-    projs:projs.slice(0, 40).map(p => ({type:p.type, x:+p.x.toFixed(2), y:+p.y.toFixed(2), vx:+p.vx.toFixed(2), vy:+p.vy.toFixed(2), grav:p.grav || 0, r:p.r, wide:p.wide || 0, team:p.team, owner:p.owner || 0, who:p.who || '', fuse:p.fuse || 0, pull:p.pull || 0})),
+    projs:projs.slice(0, 80).map(p => ({type:p.type, x:+p.x.toFixed(2), y:+p.y.toFixed(2), vx:+p.vx.toFixed(2), vy:+p.vy.toFixed(2), grav:p.grav || 0, r:p.r, wide:p.wide || 0, team:p.team, owner:p.owner || 0, who:p.who || '', fuse:p.fuse || 0, pull:p.pull || 0})),
     sums:sums.filter(s => !s.dead).slice(0, 36).map(s => ({who:s.who || '', owner:s.owner || 0, team:s.team, slot:s.slot || 0, x:+s.x.toFixed(2), y:+s.y.toFixed(2), hp:s.hp || 0, maxHp:s.maxHp || 2, life:+(s.life || 0).toFixed(2), fixed:s.fixed ? 1 : 0, char:s.char || '', per:s.per || 0, noIframe:s.noIframe ? 1 : 0})),
     zones:zones.map(z => ({x:z.x, y:z.y, r:z.r, life:z.life})),
     obj,
