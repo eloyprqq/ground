@@ -181,12 +181,13 @@ function googleLogout() {
   acct.user = null; acct.coin = 0; acct.pp = 0; acct.rise = {}; acct.ready = false;
 }
 function raiseChar(id) {
-  if (!acct.user) return;
+  if (!acct.user) { acct.msg = '로그인이 필요합니다'; return; }
   const lv = acct.rise[id] || 0;
   if (lv >= 10) return;
   const cost = lv + 1;
-  if (acct.pp < cost) { acct.msg = 'PP가 부족합니다'; return; }
+  if (acct.coin < cost || acct.pp < cost) { acct.msg = '코인과 PP가 더 필요합니다'; return; }
   acct.msg = '';
+  acct.coin -= cost;
   acct.pp -= cost;
   acct.rise[id] = lv + 1;
   saveAccount();
@@ -2381,7 +2382,7 @@ function frameMenu() {
     button(x, menuY, 240, 42, 'AI 대전', () => { S.screen = 'aimode'; });
     button(x, menuY + 46, 240, 42, '사람 대전', () => { S.screen = 'pvp'; pingFB(); });
     button(x, menuY + 92, 240, 42, '조작', () => { S.screen = 'help'; });
-    if (acct.user) button(x, menuY + 138, 240, 42, '상승', () => { acct.msg = ''; S.screen = 'rise'; });
+    button(x, menuY + 138, 240, 42, '영웅', () => openPick('영웅', null));
     if (acct.user) button(x, H - 72, 160, 40, '로그아웃', () => googleLogout());
     else button(x, H - 72, 220, 40, acct.busy ? '로그인 중' : 'Google로 로그인', () => googleLogin(), {off:acct.busy});
     if (acct.msg) text(acct.msg, x, H - 104, 13, '#e23b3b');
@@ -2414,7 +2415,7 @@ function frameMenu() {
       ['2P', '방향키, 위 점프, K 좌클릭, L 우클릭'],
       ['잼 그랩', '3대3. 보석을 주워 8개면 카운트. 죽으면 떨어뜨림'],
       ['배스킷 볼', '3대3. 공 집어 F로 던짐. 빨간 림이나 그물에 몸이 닿으면 1점. 5점'],
-      ['계정', '로그인 후 승리하면 코인 10 또는 PP 1. 패배는 코인 2']
+      ['계정', '승리하면 코인 10 또는 PP 1. 영웅 창에서 둘 다 써서 상승']
     ];
     const colW = Math.min(460, (W - x * 2 - 40) / 2);
     rows.forEach((ln, i) => {
@@ -2426,47 +2427,43 @@ function frameMenu() {
       text(ln[1], lx + 92, ly, 14, '#eceae4');
     });
     button(x, H - 72, 120, 40, '뒤로', () => { S.screen = 'title'; });
-  } else if (S.screen === 'rise') {
-    showName(false);
-    text('상승', x, 48, 26, '#eceae4');
-    text('PP  ' + acct.pp, x, 88, 14, '#8d8a82');
-    if (acct.msg) text(acct.msg, x + 100, 88, 14, '#e23b3b');
-    const rowH = Math.min(44, Math.floor((H - 188) / CHARS.length));
-    CHARS.forEach((c, i) => {
-      const y = 124 + i * rowH;
-      const lv = acct.rise[c.id] || 0;
-      const maxed = lv >= 10;
-      ctx.fillStyle = c.color;
-      ctx.beginPath(); ctx.arc(x + 8, y + (rowH - 4) / 2, 4, 0, Math.PI * 2); ctx.fill();
-      text(c.name, x + 24, y + 10, 16, '#eceae4');
-      text(String(lv), x + 150, y + 10, 16, '#8d8a82');
-      button(x + 200, y, 120, rowH - 4, maxed ? '최대' : ('PP ' + (lv + 1)), () => raiseChar(c.id), {off:maxed || acct.pp < lv + 1});
-    });
-    button(x, H - 72, 120, 40, '뒤로', () => { acct.msg = ''; S.screen = 'title'; });
   } else if (S.screen === 'pick') {
     showName(false);
     text(S.pickTitle, x, 48, 13, '#8d8a82');
+    if (acct.user) text('코인  ' + acct.coin + '     PP  ' + acct.pp, x + 160, 48, 14, '#8d8a82');
     const rowH = Math.min(44, Math.floor((H - 168) / CHARS.length));
-    let shown = CHARS[0];
     CHARS.forEach((c, i) => {
       const y = 84 + i * rowH;
-      if (pointer.x >= x && pointer.x <= x + 280 && pointer.y >= y && pointer.y <= y + rowH - 2) shown = c;
-      button(x, y, 280, rowH - 2, c.name + (acct.user ? '    상승 ' + (acct.rise[c.id] || 0) : ''), () => S.pickCb && S.pickCb(c.id), {pad:34, fs:16});
+      if (pointer.x >= x && pointer.x <= x + 280 && pointer.y >= y && pointer.y <= y + rowH - 2) S.look = c.id;
+      const lv = acct.rise[c.id] || 0;
+      button(x, y, 280, rowH - 2, c.name + (lv ? '  ' + lv : ''), () => {
+        S.look = c.id;
+        if (S.pickCb) S.pickCb(c.id);
+        else S.me = c.id;
+      }, {pad:34, fs:16, on:!S.pickCb && S.me === c.id});
       ctx.fillStyle = c.color;
       ctx.beginPath(); ctx.arc(x + 16, y + (rowH - 2) / 2, 4, 0, Math.PI * 2); ctx.fill();
     });
+    const shown = charOf(S.look || S.me);
+    const lv = acct.rise[shown.id] || 0;
+    const cost = lv + 1;
+    const maxed = lv >= 10;
     if (W > 720) {
       const rx = x + 340;
       text(shown.name, rx, 96, 32, '#eceae4');
       ctx.fillStyle = shown.color;
       ctx.fillRect(rx, 140, 28, 3);
-      text('좌클릭', rx, 168, 14, '#8d8a82');
-      text(shown.l, rx + 72, 168, 16, '#eceae4');
+      text('상승  ' + lv, rx, 156, 16, '#eceae4');
+      text('좌클릭', rx, 188, 14, '#8d8a82');
+      text(shown.l, rx + 72, 188, 16, '#eceae4');
       if (shown.r) {
-        text('우클릭', rx, 196, 14, '#8d8a82');
-        text(shown.r, rx + 72, 196, 16, '#eceae4');
+        text('우클릭', rx, 216, 14, '#8d8a82');
+        text(shown.r, rx + 72, 216, 16, '#eceae4');
       }
-      if (shown.tip) text(shown.tip, rx, shown.r ? 232 : 204, 14, '#8d8a82');
+      if (shown.tip) text(shown.tip, rx, shown.r ? 248 : 220, 14, '#8d8a82');
+      const upY = shown.tip ? 284 : shown.r ? 260 : 232;
+      button(rx, upY, 220, 36, !acct.user ? '로그인' : maxed ? '최대' : ('코인 ' + cost + '   PP ' + cost), () => raiseChar(shown.id), {off:!acct.user || maxed || acct.coin < cost || acct.pp < cost});
+      if (acct.msg) text(acct.msg, rx, upY + 44, 13, '#e23b3b');
       const feet = Math.min(H - 96, Math.max(420, H * 0.62));
       const fig = Math.min(250, H * 0.38);
       ctx.save();
@@ -2476,7 +2473,7 @@ function frameMenu() {
       ctx.fillStyle = '#2c2f36';
       ctx.fillRect(rx + Math.min(420, W - rx - 80) - 70, feet, 140, 2);
     }
-    button(x, H - 72, 120, 40, '뒤로', () => { S.screen = S.back || 'title'; });
+    button(x, H - 72, 120, 40, '뒤로', () => { acct.msg = ''; S.screen = S.back || 'title'; });
   } else if (S.screen === 'pvp') {
     showName(true);
     text('사람 대전', x, 88, 26, '#eceae4');
@@ -2595,7 +2592,7 @@ function frameMenu() {
 
 function openPick(title, cb) {
   if (S.screen !== 'pick') S.back = S.screen;
-  S.pickTitle = title; S.pickCb = cb; S.screen = 'pick';
+  S.pickTitle = title; S.pickCb = cb; S.look = S.me; acct.msg = ''; S.screen = 'pick';
 }
 
 async function fbReq(method, path, body) {
