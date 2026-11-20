@@ -987,7 +987,7 @@ function tickTimer(e, dt) {
       e.bombT = 0;
       if (!e.dead && net.role !== 'guest') {
         const hid = 'tb' + e.id + ':' + (++NID);
-        for (const o of liveFoes(e)) if (distC(e, o) <= 4) hurt(o, 8, {src:e, kb:6, hid, meter:false});
+        for (const o of liveFoes(e)) if (distC(e, o) <= 4) hurt(o, 8, {src:e, kb:6, hid});
       }
       if (!e.dead) {
         sfx('slam');
