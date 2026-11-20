@@ -6,6 +6,7 @@
 <title>그라운드</title>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-database-compat.js"></script>
 <style>
   html,body{margin:0;height:100%;background:#121418;overflow:hidden;font-family:"Malgun Gothic","Apple SD Gothic Neo",sans-serif;color:#eceae4}
   canvas{display:block;width:100%;height:100%;cursor:crosshair}
@@ -1608,6 +1609,12 @@ function adoptGuestPos(e) {
   if (Date.now() - at > 1500) return;
   if (e.netLock && Date.now() < e.netLock) return;
   if (r.x < -2 || r.x > BW + 2 || r.y < -2 || r.y > BH + 4) return;
+  if (e._netSeq === r.seq) return;
+  e._netSeq = r.seq;
+  const gap = Math.hypot(r.x - e.x, r.y - e.y);
+  const sp = Math.hypot(r.vx || 0, r.vy || 0);
+  const ahead = sp > 1 && (e.x - r.x) * (r.vx || 0) + (e.y - r.y) * (r.vy || 0) > 0;
+  if (ahead && gap < 6) return;
   e.x = r.x;
   e.y = r.y;
   if (typeof r.vx === 'number') e.vx = r.vx;
@@ -2774,6 +2781,25 @@ function openPick(title, cb) {
   S.pickTitle = title; S.pickCb = cb; S.look = S.me; acct.msg = ''; S.screen = 'pick';
 }
 
+function defined(v) {
+  if (Array.isArray(v)) return v.map(defined);
+  if (v && typeof v === 'object') {
+    const o = {};
+    for (const k of Object.keys(v)) if (v[k] !== undefined) o[k] = defined(v[k]);
+    return o;
+  }
+  return v;
+}
+function liveDb() {
+  if (typeof firebase === 'undefined' || typeof firebase.database !== 'function' || !FBAPP.apiKey) return null;
+  try {
+    if (!acct._init) {
+      if (!firebase.apps || !firebase.apps.length) firebase.initializeApp(FBAPP);
+      acct._init = true;
+    }
+    return firebase.database();
+  } catch (e) { return null; }
+}
 async function fbReq(method, path, body) {
   const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
@@ -3015,6 +3041,7 @@ function beginOnlineGame(room) {
   else openInputStream();
 }
 function closeStream() {
+  if (net.unsub) { net.unsub(); net.unsub = null; }
   if (net.es) { net.es.close(); net.es = null; }
 }
 function acceptOne(id, inp) {
@@ -3058,12 +3085,35 @@ function ingestInputs(ev) {
   }
 }
 function openInputStream() {
+  const db = liveDb();
+  if (db) {
+    const ref = db.ref('rooms/' + net.code + '/in');
+    const fn = snap => {
+      const val = snap.val();
+      if (!val || typeof val !== 'object') return;
+      Object.entries(val).forEach(([id, inp]) => { if (inp && typeof inp === 'object') acceptOne(id, inp); });
+    };
+    ref.on('value', fn);
+    net.unsub = () => ref.off('value', fn);
+    return;
+  }
   const es = new EventSource(DB + '/rooms/' + net.code + '/in.json');
   es.addEventListener('put', ingestInputs);
   es.addEventListener('patch', ingestInputs);
   net.es = es;
 }
 function openStateStream() {
+  const db = liveDb();
+  if (db) {
+    const ref = db.ref('rooms/' + net.code + '/state');
+    const fn = snap => {
+      const data = snap.val();
+      if (data && data.fighters) applySnap(data);
+    };
+    ref.on('value', fn);
+    net.unsub = () => ref.off('value', fn);
+    return;
+  }
   const es = new EventSource(DB + '/rooms/' + net.code + '/state.json');
   es.addEventListener('put', (ev) => {
     const data = readStream(ev);
@@ -3187,16 +3237,27 @@ function publishState() {
   const snap = {
     t:Date.now(),
     fighters:fighters.map(serF), mobs:mobs.filter(m => !m.dead).map(serF), bosses:bosses.map(serF),
-    projs:projs.slice(0, 40).map(p => ({type:p.type, x:+p.x.toFixed(2), y:+p.y.toFixed(2), vx:+p.vx.toFixed(2), vy:+p.vy.toFixed(2), r:p.r, team:p.team, owner:p.owner || 0})),
+    projs:projs.slice(0, 40).map(p => ({type:p.type, x:+p.x.toFixed(2), y:+p.y.toFixed(2), vx:+p.vx.toFixed(2), vy:+p.vy.toFixed(2), grav:p.grav || 0, r:p.r, team:p.team, owner:p.owner || 0})),
     zones:zones.map(z => ({x:z.x, y:z.y, r:z.r, life:z.life})),
     obj,
     meta:{mode:game.mode, which:game.which, stage:game.stage, quota:game.quota, killed:game.killed, bossing:!!game.bossing, over:!!game.over, winTeam:game.winTeam}
   };
+  const db = liveDb();
+  if (db) {
+    db.ref('rooms/' + net.code + '/state').set(defined(snap)).catch(() => {});
+    return Promise.resolve();
+  }
   return fbReq('PUT', '/rooms/' + net.code + '/state', snap).catch(() => {});
 }
 function pumpPublish() {
   if (net.role !== 'host' || S.screen !== 'battle' || !game || !net.code) return;
   const now = performance.now();
+  if (liveDb()) {
+    if (net.pubAt && now - net.pubAt < 50) return;
+    net.pubAt = now;
+    publishState();
+    return;
+  }
   if (net.pubBusy) { net.pubDirty = true; return; }
   if (net.pubAt && now - net.pubAt < 45) { net.pubDirty = true; return; }
   net.pubBusy = true;
@@ -3267,6 +3328,11 @@ function pumpInput() {
     x:+me.x.toFixed(2), y:+me.y.toFixed(2), vx:+(me.vx || 0).toFixed(2), vy:+(me.vy || 0).toFixed(2), g:me.onGround ? 1 : 0
   };
   net.inDirty = false;
+  const db = liveDb();
+  if (db) {
+    db.ref('rooms/' + net.code + '/in/' + myId).set(defined(body)).catch(() => {});
+    return;
+  }
   net.inBusy = true;
   fbReq('PUT', '/rooms/' + net.code + '/in/' + myId, body).catch(() => {}).finally(() => {
     net.inBusy = false;
@@ -3349,7 +3415,12 @@ function applySnap(s) {
       const was = prev.get(f.id);
       if (!was) continue;
       const dx = was.x - f.x, dy = was.y - f.y;
-      if (Math.hypot(dx, dy) < 2.4) { f.x += dx * 0.35; f.y += dy * 0.35; }
+      const dist = Math.hypot(dx, dy);
+      if (dist < 5) {
+        const keep = dist < 0.8 ? 0.72 : 0.35;
+        f.x += dx * keep;
+        f.y += dy * keep;
+      }
     }
     if (local && game && game.ball && game.ball.holder && game.ball.holder.id === local.id) game.ball.holder = local;
   }
@@ -3398,13 +3469,21 @@ function predict(dt) {
       game.ball.vy = me.vy;
     }
   }
-  for (const p of projs) if (me && p.owner === me.id) updateProj(p, dt);
+  for (const p of projs) {
+    if (me && p.owner === me.id) updateProj(p, dt);
+    else {
+      if (p.grav) p.vy -= p.grav * dt;
+      p.x += (p.vx || 0) * dt;
+      p.y += (p.vy || 0) * dt;
+    }
+  }
   projs = projs.filter(p => p.life > 0 && p.y > -2 && p.y < BH + 4);
   for (const e of fighters) {
     if (!e || e.dead || e.owner === myId) continue;
+    if (!e.onGround) e.vy = Math.max(-16, (e.vy || 0) - 20 * dt);
     e.x += (e.vx || 0) * dt;
     e.y += (e.vy || 0) * dt;
-    if (e.y < 1) { e.y = 1; if ((e.vy || 0) < 0) e.vy = 0; }
+    if (e.y < 1) { e.y = 1; e.vy = 0; e.onGround = true; }
   }
   fx.forEach(f => f.life -= dt);
   fx = fx.filter(f => f.life > 0);
@@ -3443,7 +3522,7 @@ function loop(now) {
   }
   if ((S.screen === 'lobby' || (S.screen === 'battle' && net.role)) && net.code) {
     net.inAcc += dt;
-    const step = S.screen === 'battle' ? 0.09 : 0.28;
+    const step = S.screen === 'battle' ? (net.unsub ? 1.2 : 0.09) : 0.28;
     if (net.inAcc > step) { net.inAcc = 0; pollOnline(); }
   }
   if (net.role === 'guest' && S.screen === 'battle' && net.code) {
