@@ -203,7 +203,7 @@ function claimReward() {
   game.rewarded = true;
   if (playerWon()) {
     if (Math.random() < 0.5) { acct.coin += 10; game.grant = {coin:10, pp:0}; }
-    else { acct.pp += 1; game.grant = {coin:0, pp:1}; }
+    else { acct.pp += 5; game.grant = {coin:0, pp:5}; }
   } else if (game.winTeam != null && game.winTeam >= 0) { acct.coin += 2; game.grant = {coin:2, pp:0}; }
   else game.grant = null;
   if (game.grant) saveAccount();
@@ -2467,7 +2467,7 @@ function frameMenu() {
       ['2P', '방향키, 위 점프, K 좌클릭, L 우클릭'],
       ['잼 그랩', '3대3. 보석을 주워 8개면 카운트. 죽으면 떨어뜨림'],
       ['배스킷 볼', '3대3. 골이 들어가면 2초 뒤 모두 스폰에서 다시 시작. 5점'],
-      ['계정', '승리하면 코인 10 또는 PP 1. 영웅 창에서 둘 다 써서 상승']
+      ['계정', '승리하면 코인 10 또는 PP 5. 영웅 창에서 둘 다 써서 상승']
     ];
     const colW = Math.min(460, (W - x * 2 - 40) / 2);
     rows.forEach((ln, i) => {
