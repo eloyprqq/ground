@@ -1253,6 +1253,7 @@ function throwBall(e) {
   if (!b || b.holder !== e || e.dead) return;
   const ox = CXx(e), oy = e.y + e.h * 0.65;
   b.holder = null;
+  b.side = e.team;
   b.y = oy;
   b.lock = 0.4;
   e.throwCd = 0.75;
@@ -1318,20 +1319,56 @@ function touchesHoop(f, hoop) {
   const top = hoop.y + 6 / z, bottom = hoop.y - (NET_H + 4) / z;
   return f.x < right && f.x + f.w > left && f.y < top && f.y + f.h > bottom;
 }
-function scoreHoop(team, who) {
+function beginGoal(team, hoop, who) {
+  if (!game || game.goal || game.over) return;
   game.score[team] = (game.score[team] || 0) + 1;
   if (who) who.dunking = true;
-  nums.push({x:who ? CXx(who) : BW / 2, y:(who ? who.y + who.h : 6) + 0.4, vy:1.6, life:0.8, text:'+1', color:'#eceae4'});
+  const x = hoop ? hoop.x : BW / 2;
+  const y = hoop ? hoop.y : 5.5;
+  game.goal = {t:2, team, x, y, win: game.score[team] >= game.need};
   if (game.ball) {
-    if (who && game.ball.holder === who) game.ball.holder = null;
-    game.ball.x = BW / 2;
-    game.ball.y = 7;
-    game.ball.vx = 0;
-    game.ball.vy = 2;
-    game.ball.lock = 0.8;
     game.ball.holder = null;
+    game.ball.x = x;
+    game.ball.y = y - 0.22;
+    game.ball.vx = 0;
+    game.ball.vy = 0;
+    game.ball.lock = 2;
   }
-  if (game.score[team] >= game.need) { game.over = true; game.winTeam = team; }
+}
+function tickGoal(dt) {
+  if (!game.goal) return;
+  game.goal.t -= dt;
+  if (game.goal.t > 0) return;
+  const win = game.goal.win;
+  const team = game.goal.team;
+  game.goal = null;
+  if (win) { game.over = true; game.winTeam = team; return; }
+  kickoff();
+}
+function kickoff() {
+  for (const f of fighters) {
+    if (f.dead) reviveFighter(f);
+    const n = fighters.filter(g => g.team === f.team).length || 1;
+    f.x = teamSpawnX(f.team, f.slot || 0, n);
+    f.y = 1;
+    f.vx = 0;
+    f.vy = 0;
+    f.dunking = false;
+    f.dashT = 0;
+    f.holdL = 0;
+    f.holdR = 0;
+    f.onGround = true;
+    f.jumps = 0;
+  }
+  if (game.ball) {
+    game.ball.holder = null;
+    game.ball.x = BW / 2;
+    game.ball.y = 6.5;
+    game.ball.vx = 0;
+    game.ball.vy = 0;
+    game.ball.side = null;
+    game.ball.lock = 0.6;
+  }
 }
 function updateBall(dt) {
   const b = game.ball;
@@ -1341,8 +1378,8 @@ function updateBall(dt) {
   for (const f of fighters) {
     if (f.dead) { f.dunking = false; continue; }
     const hoop = HOOPS.find(h => touchesHoop(f, h));
-    if (hoop) {
-      if (!f.dunking) { scoreHoop(f.team, f); return; }
+    if (hoop && hoop.team === f.team) {
+      if (!f.dunking) { beginGoal(f.team, hoop, f); return; }
     } else f.dunking = false;
   }
   if (game.over) return;
@@ -1383,9 +1420,13 @@ function updateBall(dt) {
   if (b.lock <= 0) {
     for (const hoop of HOOPS) {
       if (prevY > hoop.y && b.y <= hoop.y && Math.abs(b.x - hoop.x) < 0.85 && b.vy < 0) {
-        game.score[hoop.team] = (game.score[hoop.team] || 0) + 1;
-        b.x = BW / 2; b.y = 7; b.vx = 0; b.vy = 2; b.holder = null; b.lock = 0.8;
-        if (game.score[hoop.team] >= game.need) { game.over = true; game.winTeam = hoop.team; }
+        if (b.side !== hoop.team) {
+          b.y = hoop.y + 0.2;
+          b.vy = Math.max(5, Math.abs(b.vy) * 0.55);
+          b.vx *= 0.45;
+          return;
+        }
+        beginGoal(hoop.team, hoop);
         return;
       }
     }
@@ -1393,6 +1434,7 @@ function updateBall(dt) {
       if (f.dead) continue;
       if (Math.hypot(CXx(f) - b.x, (f.y + f.h * 0.55) - b.y) < 1) {
         b.holder = f;
+        b.side = f.team;
         break;
       }
     }
@@ -1475,7 +1517,9 @@ function separateFighters() {
   }
 }
 function simulate(dt) {
-  if (!game || game.over) return;
+  if (!game) return;
+  if (game.goal) tickGoal(dt);
+  if (game.over || game.goal) return;
   const cam = camera();
   const inputs = fighters.map((e, i) => {
     if (e.dead) return blankInp(e);
@@ -1545,7 +1589,10 @@ function camera() {
   const vw = W / z, vh = H / z;
   let cx = clamp(focus.x + focus.w / 2, vw / 2 - 1.2, BW - vw / 2 + 1.2);
   let cy = clamp((focus.y || 1) + 2.2, vh * 0.35, BH - vh * 0.45);
-  if (game && game.local2p && fighters.length > 1 && !fighters[0].dead && !fighters[1].dead) {
+  if (game && game.goal) {
+    cx = clamp(game.goal.x, vw / 2 - 4, BW - vw / 2 + 4);
+    cy = clamp(game.goal.y, vh * 0.35, BH - vh * 0.45);
+  } else if (game && game.local2p && fighters.length > 1 && !fighters[0].dead && !fighters[1].dead) {
     cx = clamp((fighters[0].x + fighters[1].x) / 2, vw / 2 - 1.2, BW - vw / 2 + 1.2);
   }
   camCache = {cx, cy, z};
@@ -2151,6 +2198,11 @@ function renderBattle() {
   drawVision(cam);
   drawObjectives(cam);
   drawHUD(cam);
+  if (game && game.goal) {
+    text('골', W / 2, H * 0.18, 64, '#eceae4', 'center');
+    ctx.fillStyle = '#e23b3b';
+    ctx.fillRect(W / 2 - 18, H * 0.18 + 72, 36, 3);
+  }
   if (S.pause || (game && game.over)) {
     ctx.fillStyle = 'rgba(8,9,12,.62)';
     ctx.fillRect(0, 0, W, H);
@@ -2414,7 +2466,7 @@ function frameMenu() {
       ['토벌', '그 보너스 없음. 12단계 다음이 보스'],
       ['2P', '방향키, 위 점프, K 좌클릭, L 우클릭'],
       ['잼 그랩', '3대3. 보석을 주워 8개면 카운트. 죽으면 떨어뜨림'],
-      ['배스킷 볼', '3대3. 공 집어 F로 던짐. 빨간 림이나 그물에 몸이 닿으면 1점. 5점'],
+      ['배스킷 볼', '3대3. 골이 들어가면 2초 뒤 모두 스폰에서 다시 시작. 5점'],
       ['계정', '승리하면 코인 10 또는 PP 1. 영웅 창에서 둘 다 써서 상승']
     ];
     const colW = Math.min(460, (W - x * 2 - 40) / 2);
