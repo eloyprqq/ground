@@ -2966,6 +2966,10 @@ function beginOnlineGame(room) {
   net.gotAt = 0;
   net.liveAfter = Date.now();
   net.snapAge = 0;
+  net.pubBusy = false;
+  net.pubDirty = true;
+  net.pubAt = 0;
+  net.snapT = 0;
   closeStream();
   if (net.role === 'guest') openStateStream();
   else openInputStream();
@@ -3121,7 +3125,7 @@ function serF(e) {
   };
 }
 function publishState() {
-  if (net.role !== 'host' || !net.code || !game) return;
+  if (net.role !== 'host' || !net.code || !game) return Promise.resolve();
   const obj = {};
   if (game.mode === 'gem') {
     obj.loose = (game.loose || []).slice(0, 12).map(g => ({x:+g.x.toFixed(2), y:+g.y.toFixed(2)}));
@@ -3148,7 +3152,20 @@ function publishState() {
     obj,
     meta:{mode:game.mode, which:game.which, stage:game.stage, quota:game.quota, killed:game.killed, bossing:!!game.bossing, over:!!game.over, winTeam:game.winTeam}
   };
-  fbReq('PUT', '/rooms/' + net.code + '/state', snap).catch(() => {});
+  return fbReq('PUT', '/rooms/' + net.code + '/state', snap).catch(() => {});
+}
+function pumpPublish() {
+  if (net.role !== 'host' || S.screen !== 'battle' || !game || !net.code) return;
+  const now = performance.now();
+  if (net.pubBusy) { net.pubDirty = true; return; }
+  if (net.pubAt && now - net.pubAt < 45) { net.pubDirty = true; return; }
+  net.pubBusy = true;
+  net.pubDirty = false;
+  net.pubAt = now;
+  publishState().finally(() => {
+    net.pubBusy = false;
+    if (net.pubDirty && net.role === 'host' && S.screen === 'battle') pumpPublish();
+  });
 }
 const netTap = {l:0, r:0, j:0, f:0, wasL:false, wasR:false, wasJ:false, wasF:false, ackL:0, ackR:0, ackJ:0, ackF:0, gapL:false, gapR:false, gapJ:false, gapF:false};
 function watchGuestTaps() {
@@ -3203,6 +3220,9 @@ function sendInput(cam) {
 }
 function applySnap(s) {
   if (!s) return;
+  if (s.t && net.snapT && s.t < net.snapT) return;
+  if (s.t) net.snapT = s.t;
+  const prev = new Map(fighters.map(f => [f.id, {x:f.x, y:f.y, owner:f.owner, dead:!!f.dead, vx:f.vx, vy:f.vy, onGround:!!f.onGround, jumps:f.jumps || 0}]));
   const hydrate = o => Object.assign({dashT:0, pullT:0, cd:{l:0, r:0, ch:0}, iframe:0, jumps:0, wall:0, _pl:false, _pr:false, _pj:false, mem:{}, lastCombat:-9}, o);
   fighters = (s.fighters || []).map(hydrate);
   mobs = (s.mobs || []).map(hydrate);
@@ -3234,6 +3254,26 @@ function applySnap(s) {
       };
     }
   }
+  if (net.role === 'guest') {
+    for (const f of fighters) {
+      const was = prev.get(f.id);
+      if (!was || f.dead || was.dead) continue;
+      const dx = was.x - f.x, dy = was.y - f.y;
+      const dist = Math.hypot(dx, dy);
+      const self = f.owner === myId;
+      if (self && dist < 2.8) {
+        f.x += dx * 0.72;
+        f.y += dy * 0.72;
+        f.vx = was.vx * 0.75 + f.vx * 0.25;
+        f.vy = was.vy * 0.75 + f.vy * 0.25;
+        f.onGround = was.onGround;
+        f.jumps = was.jumps;
+      } else if (!self && dist < 1.6) {
+        f.x += dx * 0.4;
+        f.y += dy * 0.4;
+      }
+    }
+  }
   net.snapAge = 0;
 }
 function exitRoom() {
@@ -3257,7 +3297,6 @@ async function pollOnline() {
       } else if (!orderedPlayers(room).some(p => p.id === myId)) { exitRoom(); return; }
       if (room.status === 'play') beginOnlineGame(net.room);
     } else if (S.screen === 'battle' && net.role === 'host') {
-      publishState();
       const all = await fbReq('GET', '/rooms/' + net.code + '/in') || {};
       if (all && typeof all === 'object') Object.entries(all).forEach(([id, inp]) => acceptOne(id, inp));
     } else if (S.screen === 'battle' && net.role === 'guest') {
@@ -3268,19 +3307,27 @@ async function pollOnline() {
   finally { net.busy = false; }
 }
 
-function nudgeSelf() {
+function driveSelf(dt) {
   const me = fighters.find(f => f.owner === myId);
   if (!me || me.dead) return;
   const left = !!(keys.KeyA || keys.ArrowLeft);
   const right = !!(keys.KeyD || keys.ArrowRight);
-  if (left === right) return;
-  me.vx = (right ? 6.4 : -6.4);
+  const spd = 6.4 * speedMul(me);
+  const target = left && !right ? -spd : right && !left ? spd : 0;
+  me.vx += (target - me.vx) * Math.min(1, dt * 14);
+  const jump = !!(keys.Space || keys.ArrowUp);
+  if (jump && !net.selfJump && (me.onGround || (me.jumps || 0) < 2)) {
+    me.vy = 11.5;
+    me.jumps = me.onGround ? 1 : 2;
+    me.onGround = false;
+  }
+  net.selfJump = jump;
+  moveBody(me, dt);
 }
 function frameBattle(dt) {
   showName(false);
   if (document.activeElement === nameEl) nameEl.blur();
   if (net.role === 'guest') {
-    nudgeSelf();
     predict(dt);
     renderBattle();
     return;
@@ -3292,10 +3339,15 @@ function frameBattle(dt) {
   renderBattle();
 }
 function predict(dt) {
-  net.snapAge = (net.snapAge || 0) + dt;
-  if (net.snapAge > 0.22) return;
-  for (const e of bodies()) if (!e.dead) { e.x += (e.vx || 0) * dt; e.y += (e.vy || 0) * dt; }
-  for (const p of projs) { p.x += (p.vx || 0) * dt; p.y += (p.vy || 0) * dt; }
+  driveSelf(dt);
+  for (const e of bodies()) {
+    if (e.dead || e.owner === myId) continue;
+    moveBody(e, dt);
+  }
+  for (const p of projs) {
+    p.x += (p.vx || 0) * dt;
+    p.y += (p.vy || 0) * dt;
+  }
 }
 
 function loop(now) {
@@ -3308,6 +3360,7 @@ function loop(now) {
   if (S.screen === 'battle' && game) frameBattle(dt);
   else frameMenu();
   uiClick();
+  if (net.role === 'host' && S.screen === 'battle') pumpPublish();
   if (S.screen === 'queue') { net.acc += dt; if (net.acc > 0.7) { net.acc = 0; pollQueue(); } }
   if ((S.screen === 'pvp' || S.screen === 'qmode' || S.screen === 'join') && fb.state !== 'ok' && fb.state !== 'denied') {
     if (!net.pingAt || now - net.pingAt > 2000) { net.pingAt = now; pingFB(); }
@@ -3319,7 +3372,12 @@ function loop(now) {
   }
   if (net.role === 'guest' && S.screen === 'battle' && net.code) {
     net.inSend = (net.inSend || 0) + dt;
-    if (net.inSend > 0.05) { net.inSend = 0; sendInput(camera()); }
+    const sig = (keys.KeyA || keys.ArrowLeft ? 'L' : '') + (keys.KeyD || keys.ArrowRight ? 'R' : '') + (keys.Space || keys.ArrowUp ? 'J' : '') + (mouse.l ? 'M' : '') + (mouse.r ? 'N' : '') + (keys.KeyF ? 'F' : '');
+    if (net.inSend > 0.032 || sig !== net.inSig) {
+      net.inSend = 0;
+      net.inSig = sig;
+      sendInput(camera());
+    }
   }
   prevK.Space = keys.Space;
   requestAnimationFrame(loop);
