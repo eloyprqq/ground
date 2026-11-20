@@ -415,6 +415,22 @@ function rayEnd(x, y, dx, dy, max) {
   }
   return {x:x + ux * max, y:y + uy * max, hit:false};
 }
+function chainSpot(e, aimX, aimY) {
+  const x = CXx(e), y = e.y + 0.9;
+  const dx = aimX - x, dy = aimY - y;
+  const len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len;
+  const foes = enemiesOf(e);
+  for (let d = 0.2; d <= 7; d += 0.2) {
+    const px = x + ux * d, py = y + uy * d;
+    if (pointSolid(px, py)) return {x:x + ux * (d - 0.2), y:y + uy * (d - 0.2)};
+    for (const o of foes) {
+      if (px >= o.x - 0.15 && px <= o.x + o.w + 0.15 && py >= o.y - 0.15 && py <= o.y + o.h + 0.15) {
+        return {x:CXx(o), y:CYy(o)};
+      }
+    }
+  }
+  return {x:x + ux * 7, y:y + uy * 7};
+}
 function CXx(e) { return e.x + e.w / 2; }
 function CYy(e) { return e.y + e.h * 0.45; }
 function distC(a, b) { return Math.hypot(CXx(a) - CXx(b), CYy(a) - CYy(b)); }
@@ -627,8 +643,8 @@ function updateSkill(e, inp, dt) {
     } else if (inp.lmb && e.cd.ch <= 0) {
       e.holdL += dt;
       if (e.holdL > 0.18) {
-        const end = rayEnd(CXx(e), e.y + 0.9, inp.aimX - CXx(e), inp.aimY - (e.y + 0.9), 7);
-        e.anchored = {x:end.x, y:end.y}; e.chanT = 0; e.auraTick = 0;
+        const spot = chainSpot(e, inp.aimX, inp.aimY);
+        e.anchored = {x:spot.x, y:spot.y}; e.chanT = 0; e.auraTick = 0;
       }
     }
     if (inp.lReleased && !e.anchored) {
