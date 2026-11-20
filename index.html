@@ -805,7 +805,7 @@ function blankInp(e) {
 function humanInp(e, who, cam) {
   const inp = {left:false, right:false, jump:false, lmb:false, rmb:false, aimX:e.x + 2, aimY:e.y + 1};
   if (who === 'p1') {
-    inp.left = !!keys.KeyA; inp.right = !!keys.KeyD; inp.jump = !!keys.Space;
+    inp.left = !!(keys.KeyA || keys.ArrowLeft); inp.right = !!(keys.KeyD || keys.ArrowRight); inp.jump = !!(keys.Space || keys.ArrowUp);
     inp.lmb = mouse.l; inp.rmb = mouse.r;
     const w = s2w(mouse.x, mouse.y, cam);
     inp.aimX = w.x; inp.aimY = w.y;
@@ -1242,6 +1242,7 @@ function reviveFighter(f) {
   f.respawn = 0;
   f.holdL = 0;
   f.holdR = 0;
+  f.netLock = Date.now() + 700;
 }
 function tickRespawn(dt) {
   if (!game || (game.mode !== 'gem' && game.mode !== 'ball' && game.mode !== 'hill')) return;
@@ -1437,6 +1438,7 @@ function kickoff() {
     f.vy = 0;
     f.dunking = false;
     f.dashT = 0;
+    f.netLock = Date.now() + 700;
     f.holdL = 0;
     f.holdR = 0;
     f.onGround = true;
@@ -1603,8 +1605,9 @@ function adoptGuestPos(e) {
   const r = net.remotes[e.owner];
   const at = net.remoteAt[e.owner] || 0;
   if (!r || typeof r.x !== 'number' || typeof r.y !== 'number') return;
-  if (Date.now() - at > 500) return;
-  if (Math.hypot(r.x - e.x, r.y - e.y) > 9) return;
+  if (Date.now() - at > 1500) return;
+  if (e.netLock && Date.now() < e.netLock) return;
+  if (r.x < -2 || r.x > BW + 2 || r.y < -2 || r.y > BH + 4) return;
   e.x = r.x;
   e.y = r.y;
   if (typeof r.vx === 'number') e.vx = r.vx;
@@ -3005,6 +3008,8 @@ function beginOnlineGame(room) {
   net.pubDirty = true;
   net.pubAt = 0;
   net.snapT = 0;
+  net.inBusy = false;
+  net.inDirty = false;
   closeStream();
   if (net.role === 'guest') openStateStream();
   else openInputStream();
@@ -3155,7 +3160,7 @@ function serF(e) {
     cloneA:e.cloneA || 0, clones:e.clones || 1, holdL:e.holdL || 0, holdR:e.holdR || 0, spinT:e.spinT || 0,
     aimX:+(e.aimX == null ? e.x : e.aimX).toFixed(2), aimY:+(e.aimY == null ? e.y : e.aimY).toFixed(2),
     cd:{l:+(e.cd && e.cd.l || 0).toFixed(2), r:+(e.cd && e.cd.r || 0).toFixed(2), ch:+(e.cd && e.cd.ch || 0).toFixed(2)},
-    dmgCutT:e.dmgCutT > 0 ? +e.dmgCutT.toFixed(2) : 0,
+    dmgCutT:e.dmgCutT > 0 ? +e.dmgCutT.toFixed(2) : 0, lock:e.netLock || 0,
     act:e.act || null, fused:e.fused || 0, haste:e.haste > 0 ? 1 : 0, boosting:!!e.boosting
   };
 }
@@ -3244,8 +3249,15 @@ function takeRemote(e) {
 }
 function sendInput(cam) {
   if (net.role !== 'guest' || !fighters.length) return;
+  net.inCam = cam;
+  net.inDirty = true;
+  pumpInput();
+}
+function pumpInput() {
+  if (net.role !== 'guest' || net.inBusy || !net.inDirty || !net.code) return;
   const me = fighters.find(f => f.owner === myId);
-  if (!me) return;
+  if (!me) { net.inDirty = false; return; }
+  const cam = net.inCam || camera();
   const w = s2w(mouse.x, mouse.y, cam);
   const body = {
     left:!!(keys.KeyA || keys.ArrowLeft), right:!!(keys.KeyD || keys.ArrowRight),
@@ -3254,7 +3266,12 @@ function sendInput(cam) {
     aimX:+w.x.toFixed(2), aimY:+w.y.toFixed(2), ts:Date.now(),
     x:+me.x.toFixed(2), y:+me.y.toFixed(2), vx:+(me.vx || 0).toFixed(2), vy:+(me.vy || 0).toFixed(2), g:me.onGround ? 1 : 0
   };
-  fbReq('PUT', '/rooms/' + net.code + '/in/' + myId, body).catch(() => {});
+  net.inDirty = false;
+  net.inBusy = true;
+  fbReq('PUT', '/rooms/' + net.code + '/in/' + myId, body).catch(() => {}).finally(() => {
+    net.inBusy = false;
+    if (net.inDirty && net.role === 'guest') pumpInput();
+  });
 }
 function applySnap(s) {
   if (!s) return;
@@ -3273,8 +3290,8 @@ function applySnap(s) {
     const snapMe = idx >= 0 ? nextFighters[idx] : null;
     if (snapMe) {
       const gotHit = snapMe.hp < localHp - 0.5 || (snapMe.bonus || 0) < localBonus;
-      const gap = Math.hypot((snapMe.x || 0) - local.x, (snapMe.y || 0) - local.y);
-      const place = snapMe.dead || (wasDead && !snapMe.dead) || gap > 7;
+      const relocated = (snapMe.lock || 0) > (local.netLock || 0);
+      const place = snapMe.dead || (wasDead && !snapMe.dead) || relocated;
       local.hp = snapMe.hp;
       local.maxHp = snapMe.maxHp;
       local.bonus = snapMe.bonus || 0;
@@ -3285,6 +3302,7 @@ function applySnap(s) {
         local.x = snapMe.x; local.y = snapMe.y;
         local.vx = snapMe.vx || 0; local.vy = snapMe.vy || 0;
         local.anchored = null; local.holdL = 0; local.holdR = 0; local.dashT = 0;
+        local.netLock = snapMe.lock || local.netLock || 0;
         if (!snapMe.dead) { local.onGround = true; local.jumps = 0; }
       } else if (gotHit) {
         local.vx = snapMe.vx || 0;
