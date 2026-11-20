@@ -36,6 +36,71 @@ const ctx = canvas.getContext('2d');
 const nameEl = document.getElementById('nm');
 ctx.imageSmoothingEnabled = true;
 
+let actx = null, noiseBuf = null;
+function audio() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return null;
+  if (!actx) actx = new AC();
+  if (actx.state === 'suspended') actx.resume();
+  return actx;
+}
+function tone(freq, dur, type, gain, slide, delay) {
+  const a = audio();
+  if (!a) return;
+  const t = a.currentTime + (delay || 0);
+  const o = a.createOscillator();
+  const g = a.createGain();
+  o.type = type || 'sine';
+  o.frequency.setValueAtTime(Math.max(40, freq), t);
+  if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(40, slide), t + dur);
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g); g.connect(a.destination);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function burst(dur, gain, freq) {
+  const a = audio();
+  if (!a) return;
+  if (!noiseBuf) {
+    noiseBuf = a.createBuffer(1, Math.floor(a.sampleRate * 0.25), a.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  const src = a.createBufferSource();
+  src.buffer = noiseBuf;
+  const f = a.createBiquadFilter();
+  f.type = 'bandpass';
+  f.frequency.value = freq || 900;
+  f.Q.value = 0.7;
+  const g = a.createGain();
+  const t = a.currentTime;
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  src.connect(f); f.connect(g); g.connect(a.destination);
+  src.start(t); src.stop(t + dur + 0.02);
+}
+function sfx(name) {
+  if (name === 'hit') { burst(0.05, 0.07, 1600); tone(190, 0.07, 'sine', 0.05, 70); }
+  else if (name === 'jump') tone(320, 0.06, 'sine', 0.035, 480);
+  else if (name === 'dash') { burst(0.07, 0.05, 500); tone(150, 0.08, 'sine', 0.05, 70); }
+  else if (name === 'ui') tone(620, 0.03, 'sine', 0.03);
+  else if (name === 'deny') tone(160, 0.05, 'triangle', 0.025);
+  else if (name === 'stop') tone(240, 0.08, 'sine', 0.04, 90);
+  else if (name === 'slam') { burst(0.1, 0.08, 280); tone(90, 0.14, 'sine', 0.07, 50); }
+  else if (name === 'heal') { tone(392, 0.1, 'sine', 0.04, 520); tone(523, 0.14, 'sine', 0.035, 0, 0.06); }
+}
+function gadSfx(id) {
+  if (id === 'charger') { burst(0.08, 0.06, 420); tone(140, 0.1, 'sine', 0.06, 60); }
+  else if (id === 'chainer') { tone(480, 0.07, 'triangle', 0.04, 860); tone(720, 0.06, 'sine', 0.025, 0, 0.04); }
+  else if (id === 'howler') { burst(0.22, 0.07, 1100); tone(520, 0.18, 'triangle', 0.03, 180); }
+  else if (id === 'graviter') tone(160, 0.22, 'sine', 0.05, 70);
+  else if (id === 'connector') { tone(880, 0.04, 'triangle', 0.03); tone(990, 0.04, 'triangle', 0.025, 0, 0.03); tone(760, 0.05, 'triangle', 0.02, 0, 0.06); }
+  else if (id === 'exploder') tone(220, 0.18, 'triangle', 0.04, 520);
+  else if (id === 'explorer') tone(440, 0.1, 'sine', 0.04, 700);
+  else if (id === 'spinner') { burst(0.1, 0.05, 700); tone(280, 0.12, 'triangle', 0.035, 160); }
+  else if (id === 'shifter') { tone(330, 0.12, 'sine', 0.045, 520); tone(494, 0.14, 'sine', 0.03, 0, 0.05); }
+}
+
 const CHARS = [
   {id:'charger', name:'차져', color:'#c9844a', l:'홀드 후 대시', r:'', tip:'벽차기는 벽을 보고 방향키와 Space'},
   {id:'chainer', name:'체이너', color:'#6aa4be', l:'사슬, 홀드하면 장판', r:'끌어오기', tip:''},
@@ -254,6 +319,7 @@ function menuPress(e, p) {
   } else if (e.button === 0) pointer.click = p;
 }
 canvas.addEventListener('pointerdown', e => {
+  audio();
   if (S.screen === 'join') nameEl.blur();
   lastPtr = performance.now();
   const p = screenPos(e); pointer.x = p.x; pointer.y = p.y; mouse.x = p.x; mouse.y = p.y;
@@ -270,6 +336,7 @@ addEventListener('pointerup', e => {
 });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 addEventListener('keydown', e => {
+  audio();
   keys[e.code] = true;
   if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
   if (e.code === 'Escape' && S.screen === 'battle') S.pause = !S.pause;
@@ -313,7 +380,7 @@ function button(x, y, w, h, label, fn, opt = {}) {
 function uiClick() {
   if (!pointer.click) return;
   const c = pointer.click; pointer.click = null;
-  for (const h of hits) if (c.x >= h.x && c.x <= h.x + h.w && c.y >= h.y && c.y <= h.y + h.h) { h.fn(); return; }
+  for (const h of hits) if (c.x >= h.x && c.x <= h.x + h.w && c.y >= h.y && c.y <= h.y + h.h) { sfx('ui'); h.fn(); return; }
 }
 function text(s, x, y, size, color, align) {
   ctx.fillStyle = color || '#fff';
@@ -497,6 +564,7 @@ function hurt(t, amount, opt = {}) {
   nums.push({x:CXx(t), y:t.y + t.h + 0.2, vy:2.2, life:0.7, text:String(amount), color:opt.dot ? '#ffd0d0' : '#fff'});
   if (t.kind === 'fighter') shake = Math.min(10, shake + Math.min(6, amount));
   if (t.hp <= 0) kill(t);
+  if (!opt.dot) sfx('hit');
   return true;
 }
 function kill(t) {
@@ -623,6 +691,7 @@ function doDash(e, inp, holdTime) {
   e.dashT = dur; e.dashVx = dx * dist / dur; e.dashVy = dy * dist / dur;
   e.dashId = ++NID; e.dashDmg = 5; e.cd.l = 0.5; e.dmgCutT = 1; e.holdL = 0;
   e.facing = dx >= 0 ? 1 : -1;
+  if (!e.ai) sfx('dash');
   markAttack(e);
   fx.push({x:CXx(e), y:CYy(e), r:0.4, life:0.12, max:0.12, color:'#ffb15a'});
 }
@@ -734,10 +803,14 @@ function castGadget(e) {
   return false;
 }
 function tryGadget(e) {
-  if (!canGad(e)) return;
-  if (!castGadget(e)) return;
+  if (!canGad(e)) {
+    if (e && !e.dead && !e.ai && (e.gadLv || 0) >= 5) sfx('deny');
+    return;
+  }
+  if (!castGadget(e)) { sfx('deny'); return; }
   e.gadLeft -= 1;
   e.gadCd = 10;
+  gadSfx(e.char);
 }
 function tickGadget(e, dt) {
   if (e.chainSpin > 0) {
@@ -752,6 +825,7 @@ function tickGadget(e, dt) {
       if (e._chainHit[o.id]) continue;
       if (distSeg(CXx(o), CYy(o), x0, y0, x1, y1) < 0.55) {
         e._chainHit[o.id] = 1;
+        sfx('stop');
         o.stopT = Math.max(o.stopT || 0, 3);
         o.vx = 0; o.vy = 0;
       }
@@ -774,6 +848,7 @@ function tickGadget(e, dt) {
       for (const o of liveFoes(e)) { const d = distC(e, o); if (d <= bd) { bd = d; t = o; } }
       if (t) { e.x = t.x; e.y = Math.max(1, t.y); t.stopT = Math.max(t.stopT || 0, 2); t.vx = 0; t.vy = 0; }
       e.vy = -8;
+      sfx('slam');
       hurt(t, 4, {src:e, kb:2, hid:'ge' + e.id + ':' + (t ? t.id : 0)});
       fx.push({x:CXx(e), y:e.y, r:1.4, life:0.18, max:0.18, color:'#fff'});
     }
@@ -786,6 +861,7 @@ function tickGadget(e, dt) {
     else if (e.gadWin <= 0) {
       for (const o of liveFoes(e)) hurt(o, 3, {src:e, hid:'gw' + e.id});
       e.hp = e.maxHp;
+      sfx('heal');
       mine.forEach(s => { s.dead = true; });
       e.guardT = 0;
       e.gadWin = 0;
@@ -799,8 +875,9 @@ function tickSums() {
     const owner = fighters.find(f => (s.who && f.owner === s.who) || f.id === s.owner);
     if (!owner || owner.dead) { s.dead = true; continue; }
     const a = T * 2.2 + (s.slot || 0) * Math.PI * 2 / 3;
-    s.x = CXx(owner) + Math.cos(a) * 1.6 - s.w / 2;
-    s.y = owner.y + 0.85 + Math.sin(a) * 0.85;
+    s.x = CXx(owner) + Math.cos(a) * 2.05 - s.w / 2;
+    s.y = owner.y + 0.85 + Math.sin(a) * 1.05;
+    s.facing = Math.cos(a) >= 0 ? 1 : -1;
     s.flash = Math.max(0, (s.flash || 0) - 0.016);
   }
   sums = sums.filter(s => !s.dead);
@@ -1092,6 +1169,7 @@ function updateFighter(e, inp, dt) {
   if (!kicked && inp.jumpEdge && !e.dashT && !e.gadCast && (e.onGround || e.jumps < 2)) {
     const orb = onOrb(e);
     e.vy = orb ? 16.4 : 11.5;
+    if (!e.ai) sfx('jump');
     e.jumps = e.onGround ? 1 : 2;
     e.onGround = false;
     if (orb) fx.push({x:CXx(e), y:e.y, r:0.7, life:0.2, max:0.2, color:'#ffe14a'});
@@ -2276,7 +2354,20 @@ function drawActor(e, cam) {
 
 function drawProj(p, cam) {
   const s = w2s(p.x, p.y, cam);
-  ctx.fillStyle = p.type === 'gather' ? '#eceae4' : p.type === 'goo' ? '#8ee86a' : p.type === 'orb' ? '#d6ff7a' : p.type === 'soul' ? '#e6d2ff' : p.type === 'square' ? '#9db0ff' : p.type === 'grenade' ? '#6d7cff' : p.type === 'arrow' ? '#f4e2b0' : p.type === 'sword' ? '#d9dde8' : p.type === 'star' ? '#ffe14a' : '#9aefff';
+  if (p.type === 'gather') {
+    const r = Math.max(8, (p.r || 0.34) * cam.z * 2.2);
+    ctx.strokeStyle = '#7c86c4';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = '#eceae4';
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, 3, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  ctx.fillStyle = p.type === 'goo' ? '#8ee86a' : p.type === 'orb' ? '#d6ff7a' : p.type === 'soul' ? '#e6d2ff' : p.type === 'square' ? '#9db0ff' : p.type === 'grenade' ? '#6d7cff' : p.type === 'arrow' ? '#f4e2b0' : p.type === 'sword' ? '#d9dde8' : p.type === 'star' ? '#ffe14a' : '#9aefff';
   const r = Math.max(3, (p.r || 0.2) * cam.z);
   ctx.beginPath();
   if (p.type === 'orb' || p.type === 'goo') ctx.ellipse(s.x, s.y, r * 1.35, r * 0.85, 0, 0, Math.PI * 2);
@@ -2452,19 +2543,37 @@ function drawHUD(cam) {
 }
 
 function drawSums(cam) {
+  const rings = {};
+  for (const s of sums) {
+    if (s.dead || rings[s.owner]) continue;
+    rings[s.owner] = 1;
+    const owner = fighters.find(f => f.id === s.owner);
+    if (!owner) continue;
+    const c = w2s(CXx(owner), owner.y + 0.85, cam);
+    ctx.save();
+    ctx.globalAlpha = 0.4;
+    ctx.strokeStyle = '#9a86c2';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.ellipse(c.x, c.y, 2.05 * cam.z, 1.05 * cam.z, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
   for (const s of sums) {
     if (s.dead) continue;
-    const p = w2s(CXx(s), s.y + s.h * 0.5, cam);
-    const rad = Math.max(8, s.w * cam.z * 0.55);
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, rad, 0, Math.PI * 2);
-    ctx.fillStyle = s.flash > 0 ? '#fff' : '#eceae4';
-    ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = '#e23b3b';
-    ctx.stroke();
+    const feet = w2s(s.x, s.y, cam);
+    const ph = 0.98 * cam.z;
+    ctx.save();
+    ctx.translate(Math.round(feet.x + s.w * cam.z / 2), Math.round(feet.y));
+    if ((s.facing || 1) < 0) ctx.scale(-1, 1);
+    ctx.globalAlpha = 0.94;
+    paintFighter('shifter', ph, s.flash > 0, false, true);
+    ctx.restore();
+    const bar = w2s(CXx(s), s.y, cam);
+    ctx.fillStyle = '#2a2c32';
+    ctx.fillRect(bar.x - 8, bar.y + 5, 16, 2);
     ctx.fillStyle = '#e23b3b';
-    ctx.fillRect(p.x - 7, p.y + rad + 3, 14 * clamp((s.hp || 0) / 2, 0, 1), 2);
+    ctx.fillRect(bar.x - 8, bar.y + 5, 16 * clamp((s.hp || 0) / 2, 0, 1), 2);
   }
 }
 function drawChains(cam) {
@@ -2472,25 +2581,65 @@ function drawChains(cam) {
     const c = e._chain;
     if (!c) continue;
     const a = w2s(c.x0, c.y0, cam), b = w2s(c.x1, c.y1, cam);
-    ctx.strokeStyle = '#eceae4';
-    ctx.lineWidth = 2;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    ctx.strokeStyle = '#6aa4be';
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
     ctx.stroke();
-    ctx.fillStyle = '#e23b3b';
-    ctx.beginPath();
-    ctx.arc(b.x, b.y, 4, 0, Math.PI * 2);
-    ctx.fill();
+    for (let i = 1; i <= 4; i++) {
+      const t = i / 4;
+      ctx.beginPath();
+      ctx.arc(a.x + dx * t, a.y + dy * t, i === 4 ? 4.5 : 3, 0, Math.PI * 2);
+      ctx.strokeStyle = i === 4 ? '#e23b3b' : '#6aa4be';
+      ctx.stroke();
+    }
   }
   for (const e of fighters) {
     if (e.dead) continue;
     if (e.guardT > 0) {
-      const p = w2s(CXx(e), e.y + e.h * 0.5, cam);
-      ctx.strokeStyle = '#eceae4';
+      const p = w2s(CXx(e), e.y + e.h * 0.55, cam);
+      const rad = Math.max(28, e.w * cam.z * 1.2);
+      const left = clamp(e.guardT / 5, 0, 1);
+      ctx.strokeStyle = 'rgba(154,134,194,.4)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, rad, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = '#e23b3b';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, rad, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * left);
+      ctx.stroke();
+    }
+    if (e.gadSpin > 0) {
+      const p = w2s(CXx(e), e.y + 0.45, cam);
+      ctx.save();
+      ctx.globalAlpha = 0.45;
+      ctx.strokeStyle = charOf(e.char).color;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 5 * cam.z, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    if (e.gadCast > 0) {
+      const a = w2s(CXx(e), 1, cam), b = w2s(CXx(e), e.y + e.h, cam);
+      ctx.strokeStyle = '#e23b3b';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, e.w * cam.z * 0.85, 0, Math.PI * 2);
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+    if (e.slowT > 0) {
+      const p = w2s(CXx(e), e.y, cam);
+      ctx.strokeStyle = '#e23b3b';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(p.x - 8, p.y + 6);
+      ctx.lineTo(p.x + 8, p.y + 6);
       ctx.stroke();
     }
     if (e.stopT > 0) {
@@ -3671,6 +3820,7 @@ function applySnap(s) {
     const snapMe = idx >= 0 ? nextFighters[idx] : null;
     if (snapMe) {
       const gotHit = snapMe.hp < localHp - 0.5 || (snapMe.bonus || 0) < localBonus;
+      if (gotHit) sfx('hit');
       const relocated = (snapMe.lock || 0) > (local.netLock || 0);
       const place = snapMe.dead || (wasDead && !snapMe.dead) || relocated;
       local.hp = snapMe.hp;
