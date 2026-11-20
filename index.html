@@ -453,6 +453,11 @@ function nearestTo(x, y, team) {
 function byId(id) { return bodies().find(e => e.id === id) || null; }
 
 function hurt(t, amount, opt = {}) {
+  if (net.role === 'guest') {
+    if (!t || t.dead || amount <= 0) return false;
+    nums.push({x:CXx(t), y:t.y + t.h + 0.2, vy:2.2, life:0.55, text:String(amount), color:opt.dot ? '#ffd0d0' : '#fff'});
+    return false;
+  }
   if (!t || t.dead || amount <= 0) return false;
   if (opt.hid) {
     t._hits = t._hits || {};
@@ -1593,6 +1598,19 @@ function separateFighters() {
     }
   }
 }
+function adoptGuestPos(e) {
+  if (!remoteControls(e)) return;
+  const r = net.remotes[e.owner];
+  const at = net.remoteAt[e.owner] || 0;
+  if (!r || typeof r.x !== 'number' || typeof r.y !== 'number') return;
+  if (Date.now() - at > 500) return;
+  if (Math.hypot(r.x - e.x, r.y - e.y) > 9) return;
+  e.x = r.x;
+  e.y = r.y;
+  if (typeof r.vx === 'number') e.vx = r.vx;
+  if (typeof r.vy === 'number') e.vy = r.vy;
+  if (r.g != null) e.onGround = !!r.g;
+}
 function simulate(dt) {
   if (!game) return;
   if (game.goal) tickGoal(dt);
@@ -1608,6 +1626,7 @@ function simulate(dt) {
     return aiInp(e);
   });
   fighters.forEach((e, i) => {
+    adoptGuestPos(e);
     if (e.ai && inputs[i]) steerObjective(e, inputs[i]);
     e._throw = !!(inputs[i] && inputs[i].throw);
     const mine = !net.role ? i === 0 : e.owner === myId;
@@ -3163,7 +3182,7 @@ function publishState() {
   const snap = {
     t:Date.now(),
     fighters:fighters.map(serF), mobs:mobs.filter(m => !m.dead).map(serF), bosses:bosses.map(serF),
-    projs:projs.slice(0, 40).map(p => ({type:p.type, x:+p.x.toFixed(2), y:+p.y.toFixed(2), vx:+p.vx.toFixed(2), vy:+p.vy.toFixed(2), r:p.r, team:p.team})),
+    projs:projs.slice(0, 40).map(p => ({type:p.type, x:+p.x.toFixed(2), y:+p.y.toFixed(2), vx:+p.vx.toFixed(2), vy:+p.vy.toFixed(2), r:p.r, team:p.team, owner:p.owner || 0})),
     zones:zones.map(z => ({x:z.x, y:z.y, r:z.r, life:z.life})),
     obj,
     meta:{mode:game.mode, which:game.which, stage:game.stage, quota:game.quota, killed:game.killed, bossing:!!game.bossing, over:!!game.over, winTeam:game.winTeam}
@@ -3225,12 +3244,15 @@ function takeRemote(e) {
 }
 function sendInput(cam) {
   if (net.role !== 'guest' || !fighters.length) return;
+  const me = fighters.find(f => f.owner === myId);
+  if (!me) return;
   const w = s2w(mouse.x, mouse.y, cam);
   const body = {
     left:!!(keys.KeyA || keys.ArrowLeft), right:!!(keys.KeyD || keys.ArrowRight),
     jump:!!(keys.Space || keys.ArrowUp), lmb:mouse.l, rmb:mouse.r, throw:!!keys.KeyF,
     id:myId, tapL:netTap.l, tapR:netTap.r, tapJ:netTap.j, tapF:netTap.f, seq:++net.outSeq,
-    aimX:+w.x.toFixed(2), aimY:+w.y.toFixed(2), ts:Date.now()
+    aimX:+w.x.toFixed(2), aimY:+w.y.toFixed(2), ts:Date.now(),
+    x:+me.x.toFixed(2), y:+me.y.toFixed(2), vx:+(me.vx || 0).toFixed(2), vy:+(me.vy || 0).toFixed(2), g:me.onGround ? 1 : 0
   };
   fbReq('PUT', '/rooms/' + net.code + '/in/' + myId, body).catch(() => {});
 }
@@ -3238,12 +3260,45 @@ function applySnap(s) {
   if (!s) return;
   if (s.t && net.snapT && s.t < net.snapT) return;
   if (s.t) net.snapT = s.t;
-  const prev = new Map(fighters.map(f => [f.id, {x:f.x, y:f.y, owner:f.owner, dead:!!f.dead, vx:f.vx, vy:f.vy, onGround:!!f.onGround, jumps:f.jumps || 0}]));
+  const local = net.role === 'guest' ? fighters.find(f => f.owner === myId) : null;
+  const localHp = local ? local.hp : 0;
+  const localBonus = local ? (local.bonus || 0) : 0;
+  const wasDead = !!(local && local.dead);
+  const mineProjs = local ? projs.filter(p => p.owner === local.id && p.life > 0) : [];
+  const prev = new Map(fighters.filter(f => f.owner !== myId).map(f => [f.id, {x:f.x, y:f.y}]));
   const hydrate = o => Object.assign({dashT:0, pullT:0, cd:{l:0, r:0, ch:0}, iframe:0, jumps:0, wall:0, _pl:false, _pr:false, _pj:false, mem:{}, lastCombat:-9}, o);
-  fighters = (s.fighters || []).map(hydrate);
+  const nextFighters = (s.fighters || []).map(hydrate);
+  if (local) {
+    const idx = nextFighters.findIndex(f => f.owner === myId);
+    const snapMe = idx >= 0 ? nextFighters[idx] : null;
+    if (snapMe) {
+      const gotHit = snapMe.hp < localHp - 0.5 || (snapMe.bonus || 0) < localBonus;
+      const gap = Math.hypot((snapMe.x || 0) - local.x, (snapMe.y || 0) - local.y);
+      const place = snapMe.dead || (wasDead && !snapMe.dead) || gap > 7;
+      local.hp = snapMe.hp;
+      local.maxHp = snapMe.maxHp;
+      local.bonus = snapMe.bonus || 0;
+      local.dead = !!snapMe.dead;
+      local.gems = snapMe.gems || 0;
+      if (snapMe.flash) local.flash = snapMe.flash;
+      if (place) {
+        local.x = snapMe.x; local.y = snapMe.y;
+        local.vx = snapMe.vx || 0; local.vy = snapMe.vy || 0;
+        local.anchored = null; local.holdL = 0; local.holdR = 0; local.dashT = 0;
+        if (!snapMe.dead) { local.onGround = true; local.jumps = 0; }
+      } else if (gotHit) {
+        local.vx = snapMe.vx || 0;
+        local.vy = snapMe.vy || 0;
+        if (snapMe.hp < localHp - 0.5) nums.push({x:CXx(local), y:local.y + local.h + 0.2, vy:2.2, life:0.55, text:String(Math.max(1, Math.round(localHp - snapMe.hp))), color:'#fff'});
+      }
+      nextFighters[idx] = local;
+    }
+  }
+  fighters = nextFighters;
   mobs = (s.mobs || []).map(hydrate);
   bosses = (s.bosses || []).map(hydrate);
-  projs = (s.projs || []).map(p => Object.assign({life:1, dmg:0, owner:-1}, p));
+  const remoteProjs = (s.projs || []).map(p => Object.assign({life:1, dmg:0, owner:-1}, p)).filter(p => !local || p.owner !== local.id);
+  projs = remoteProjs.concat(mineProjs);
   zones = s.zones || [];
   if (s.meta && game) {
     game.stage = s.meta.stage; game.quota = s.meta.quota; game.killed = s.meta.killed;
@@ -3272,23 +3327,13 @@ function applySnap(s) {
   }
   if (net.role === 'guest') {
     for (const f of fighters) {
+      if (!f || f.owner === myId || f.dead) continue;
       const was = prev.get(f.id);
-      if (!was || f.dead || was.dead) continue;
+      if (!was) continue;
       const dx = was.x - f.x, dy = was.y - f.y;
-      const dist = Math.hypot(dx, dy);
-      const self = f.owner === myId;
-      if (self && dist < 2.8) {
-        f.x += dx * 0.72;
-        f.y += dy * 0.72;
-        f.vx = was.vx * 0.75 + f.vx * 0.25;
-        f.vy = was.vy * 0.75 + f.vy * 0.25;
-        f.onGround = was.onGround;
-        f.jumps = was.jumps;
-      } else if (!self && dist < 1.6) {
-        f.x += dx * 0.4;
-        f.y += dy * 0.4;
-      }
+      if (Math.hypot(dx, dy) < 2.4) { f.x += dx * 0.35; f.y += dy * 0.35; }
     }
+    if (local && game && game.ball && game.ball.holder && game.ball.holder.id === local.id) game.ball.holder = local;
   }
   net.snapAge = 0;
 }
@@ -3323,22 +3368,30 @@ async function pollOnline() {
   finally { net.busy = false; }
 }
 
-function driveSelf(dt) {
+function predict(dt) {
   const me = fighters.find(f => f.owner === myId);
-  if (!me || me.dead) return;
-  const left = !!(keys.KeyA || keys.ArrowLeft);
-  const right = !!(keys.KeyD || keys.ArrowRight);
-  const spd = 6.4 * speedMul(me);
-  const target = left && !right ? -spd : right && !left ? spd : 0;
-  me.vx += (target - me.vx) * Math.min(1, dt * 14);
-  const jump = !!(keys.Space || keys.ArrowUp);
-  if (jump && !net.selfJump && (me.onGround || (me.jumps || 0) < 2)) {
-    me.vy = 11.5;
-    me.jumps = me.onGround ? 1 : 2;
-    me.onGround = false;
+  if (me && !me.dead && !(game && (game.over || game.goal))) {
+    const inp = humanInp(me, 'p1', camera());
+    updateFighter(me, inp, dt);
+    if (game && game.ball && game.ball.holder === me) {
+      game.ball.x = CXx(me);
+      game.ball.y = me.y + me.h * 0.7;
+      game.ball.vx = me.vx;
+      game.ball.vy = me.vy;
+    }
   }
-  net.selfJump = jump;
-  moveBody(me, dt);
+  for (const p of projs) if (me && p.owner === me.id) updateProj(p, dt);
+  projs = projs.filter(p => p.life > 0 && p.y > -2 && p.y < BH + 4);
+  for (const e of fighters) {
+    if (!e || e.dead || e.owner === myId) continue;
+    e.x += (e.vx || 0) * dt;
+    e.y += (e.vy || 0) * dt;
+    if (e.y < 1) { e.y = 1; if ((e.vy || 0) < 0) e.vy = 0; }
+  }
+  fx.forEach(f => f.life -= dt);
+  fx = fx.filter(f => f.life > 0);
+  nums.forEach(n => { n.y += (n.vy || 0) * dt; n.life -= dt; });
+  nums = nums.filter(n => n.life > 0);
 }
 function frameBattle(dt) {
   showName(false);
@@ -3353,17 +3406,6 @@ function frameBattle(dt) {
     fx.forEach(f => f.life -= dt);
   }
   renderBattle();
-}
-function predict(dt) {
-  driveSelf(dt);
-  for (const e of bodies()) {
-    if (e.dead || e.owner === myId) continue;
-    moveBody(e, dt);
-  }
-  for (const p of projs) {
-    p.x += (p.vx || 0) * dt;
-    p.y += (p.vy || 0) * dt;
-  }
 }
 
 function loop(now) {
