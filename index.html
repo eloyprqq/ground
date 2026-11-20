@@ -620,7 +620,7 @@ function updateSkill(e, inp, dt) {
       if (e.auraTick >= 0.15) {
         e.auraTick -= 0.15;
         for (const o of enemiesOf(e)) {
-          if (Math.hypot(CXx(o) - e.anchored.x, CYy(o) - e.anchored.y) <= 1.15) hurt(o, 2, {src:e, dot:true});
+          if (Math.hypot(CXx(o) - e.anchored.x, CYy(o) - e.anchored.y) <= 1.15) hurt(o, 1, {src:e, dot:true});
         }
       }
       if (e.chanT >= 3 || inp.lReleased) { e.anchored = null; e.cd.ch = 0.5; e.holdL = 0; e.chanT = 0; }
