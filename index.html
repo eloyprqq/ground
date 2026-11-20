@@ -1187,6 +1187,9 @@ function initObjective(kind) {
     game.loose = null;
   }
 }
+function objKind(mode) {
+  return mode === 'gem' || mode === 'ball' || mode === 'hill';
+}
 function startObjective(kind, me) {
   startAiTeam(6, me);
   initObjective(kind);
@@ -1591,7 +1594,8 @@ function simulate(dt) {
   fighters.forEach((e, i) => {
     if (e.ai && inputs[i]) steerObjective(e, inputs[i]);
     e._throw = !!(inputs[i] && inputs[i].throw);
-    const down = !e.ai && !!keys.KeyF;
+    const mine = !net.role ? i === 0 : e.owner === myId;
+    const down = mine && !e.ai && !!keys.KeyF;
     e._fEdge = down && !e._fWas;
     e._fWas = down;
   });
@@ -2539,9 +2543,9 @@ function frameMenu() {
       ['잡몹', '대전에서만. 잡으면 이속, 회복, 추가 체력'],
       ['토벌', '그 보너스 없음. 12단계 다음이 보스'],
       ['2P', '방향키, 위 점프, K 좌클릭, L 우클릭'],
-      ['잼 그랩', '3대3. 보석을 주워 8개면 카운트. 죽으면 떨어뜨림'],
-      ['배스킷 볼', '3대3. 골이 들어가면 2초 뒤 모두 스폰에서 다시 시작. 5점'],
-      ['점령', '3대3. 가운데 구역을 12초 지키면 승리. 양쪽이 있으면 멈춤'],
+      ['잼 그랩', '3대3. 보석 8개면 카운트. 사람 대전 방과 매칭도 됨'],
+      ['배스킷 볼', '3대3. 5점. 골 뒤 2초 만에 스폰. 사람 대전에서도 F로 던짐'],
+      ['점령', '3대3. 가운데를 12초. 사람 대전 방과 매칭도 됨'],
       ['계정', '승리하면 코인 4~7, PP 4~7. 30%는 둘 다. 영웅 창에서 상승']
     ];
     const colW = Math.min(460, (W - x * 2 - 40) / 2);
@@ -2624,8 +2628,11 @@ function frameMenu() {
     button(x, 168, 260, 40, '1대1', () => startQueue('duel', null, 2));
     button(x, 212, 260, 40, '2대2', () => startQueue('duel', null, 4));
     button(x, 256, 260, 40, '3대3', () => startQueue('duel', null, 6));
-    button(x, 312, 260, 40, '슬라임 토벌', () => startQueue('raid', 'slime', 2));
-    button(x, 356, 260, 40, '검은 기사단', () => startQueue('raid', 'knight', 2));
+    button(x, 312, 260, 40, '잼 그랩', () => startQueue('gem', null, 6));
+    button(x, 356, 260, 40, '배스킷 볼', () => startQueue('ball', null, 6));
+    button(x, 400, 260, 40, '점령', () => startQueue('hill', null, 6));
+    button(x, 456, 260, 40, '슬라임 토벌', () => startQueue('raid', 'slime', 2));
+    button(x, 500, 260, 40, '검은 기사단', () => startQueue('raid', 'knight', 2));
     button(x, H - 72, 120, 40, '뒤로', () => { S.screen = 'pvp'; });
   } else if (S.screen === 'queue') {
     showName(true);
@@ -2648,9 +2655,9 @@ function frameMenu() {
     text(size > 2 ? '이 코드를 팀원에게 알려 주세요' : '이 코드를 상대에게 알려 주세요', x, 88, 13, '#8d8a82');
     let y = 112;
     if (net.role === 'host') {
-      button(x, y, 100, 34, '1대1', () => setRoomSize(2), {on:size === 2 && room.mode !== 'raid'});
-      button(x + 108, y, 100, 34, '2대2', () => setRoomSize(4), {on:size === 4});
-      button(x + 216, y, 100, 34, '3대3', () => setRoomSize(6), {on:size === 6});
+      button(x, y, 100, 34, '1대1', () => setRoomSize(2), {on:room.mode === 'duel' && size === 2});
+      button(x + 108, y, 100, 34, '2대2', () => setRoomSize(4), {on:room.mode === 'duel' && size === 4});
+      button(x + 216, y, 100, 34, '3대3', () => setRoomSize(6), {on:room.mode === 'duel' && size === 6});
       y += 44;
     }
     text('왼쪽', x, y, 12, '#8d8a82');
@@ -2673,8 +2680,12 @@ function frameMenu() {
     });
     y += 44;
     if (net.role === 'host') {
-      button(x, y, 120, 34, '대전', () => setRoomSize(room.mode === 'raid' ? 2 : size), {on:room.mode !== 'raid'});
+      button(x, y, 120, 34, '대전', () => setRoomSize(room.mode === 'raid' ? 2 : (room.size || size)), {on:room.mode === 'duel'});
       button(x + 128, y, 120, 34, '토벌', () => setRaidMode(), {on:room.mode === 'raid'});
+      y += 42;
+      button(x, y, 120, 34, '잼 그랩', () => setObjective('gem'), {on:room.mode === 'gem'});
+      button(x + 128, y, 140, 34, '배스킷 볼', () => setObjective('ball'), {on:room.mode === 'ball'});
+      button(x + 276, y, 100, 34, '점령', () => setObjective('hill'), {on:room.mode === 'hill'});
       y += 42;
       if (room.mode === 'raid') {
         button(x, y, 120, 32, '슬라임', () => patchRoom({raid:'slime'}), {on:room.raid !== 'knight'});
@@ -2690,6 +2701,9 @@ function frameMenu() {
     } else {
       const modeText = room.mode === 'raid'
         ? ((room.raid === 'knight' ? '기사단 ' : '슬라임 ') + (room.stage || 1))
+        : room.mode === 'gem' ? '잼 그랩'
+        : room.mode === 'ball' ? '배스킷 볼'
+        : room.mode === 'hill' ? '점령'
         : (size === 6 ? '3대3' : size === 4 ? '2대2' : '대전');
       text(modeText, x, y, 16, '#eceae4');
       text('방장이 시작하면 들어갑니다.', x, y + 28, 14, '#8d8a82');
@@ -2761,12 +2775,16 @@ function makeCode() {
 }
 function queueLabel() {
   if (S.qmode === 'raid') return '토벌';
+  if (S.qmode === 'gem') return '잼 그랩';
+  if (S.qmode === 'ball') return '배스킷 볼';
+  if (S.qmode === 'hill') return '점령';
   if (S.qsize === 6) return '3대3';
   if (S.qsize === 4) return '2대2';
   return '1대1';
 }
 function roomNeed(room) {
   if (!room || room.mode === 'raid') return 2;
+  if (objKind(room.mode)) return 6;
   return room.size || 2;
 }
 function playerList(room) {
@@ -2878,6 +2896,11 @@ async function setRaidMode() {
   const kept = orderedPlayers(net.room).slice(0, 2);
   try { await writeSeats(kept, {size:2, mode:'raid'}); } catch (e) { fbFail(e); }
 }
+async function setObjective(kind) {
+  if (net.role !== 'host' || !net.room) return;
+  const kept = orderedPlayers(net.room).slice(0, 6);
+  try { await writeSeats(kept, {size:6, mode:kind}); } catch (e) { fbFail(e); }
+}
 async function lobbyChar(id) {
   if (!net.room || !net.code) return;
   const list = orderedPlayers(net.room);
@@ -2930,7 +2953,10 @@ function beginOnlineGame(room) {
       fighters[1].ai = !!g.ai;
     }
     net.myTeam = 0;
-  } else startTeam(list);
+  } else {
+    startTeam(list);
+    if (objKind(room.mode)) initObjective(room.mode);
+  }
   net.playing = true;
   net.remote = null;
   net.remotes = {};
@@ -3034,7 +3060,7 @@ function enterMatched(code, room) {
   net.code = code;
   net.role = room && room.host && room.host.id === myId ? 'host' : 'guest';
   net.room = room;
-  if (room && room.mode === 'duel' && room.status === 'play') beginOnlineGame(room);
+  if (room && room.status === 'play' && room.mode !== 'raid') beginOnlineGame(room);
   else S.screen = 'lobby';
   fbReq('DELETE', '/queue/' + myId).catch(() => {});
 }
@@ -3066,7 +3092,7 @@ async function pollQueue() {
         const room = {
           host:members[0], guest:members[1], players:seatMap(members), size,
           mode:S.qmode, raid:S.qraid || 'slime', stage:1,
-          status:S.qmode === 'duel' ? 'play' : 'lobby', ping:Date.now()
+          status:S.qmode === 'raid' ? 'lobby' : 'play', ping:Date.now()
         };
         await fbReq('PUT', '/rooms/' + code, room);
         for (const m of members) await fbReq('PUT', '/queue/' + m.id + '/room', code);
@@ -3085,7 +3111,7 @@ function serF(e) {
     id:e.id, kind:e.kind, char:e.char || null, sub:e.sub || null, team:e.team, name:e.name || '',
     x:+e.x.toFixed(2), y:+e.y.toFixed(2), w:e.w, h:e.h, vx:+(e.vx || 0).toFixed(2), vy:+(e.vy || 0).toFixed(2),
     hp:Math.max(0, Math.round(e.hp)), maxHp:e.maxHp, bonus:e.bonus || 0, facing:e.facing || 1,
-    dead:!!e.dead, flash:e.flash > 0 ? 0.1 : 0, onGround:!!e.onGround, tint:e.tint || null, owner:e.owner || null, ai:!!e.ai,
+    dead:!!e.dead, flash:e.flash > 0 ? 0.1 : 0, onGround:!!e.onGround, tint:e.tint || null, owner:e.owner || null, ai:!!e.ai, gems:e.gems || 0,
     anchored:e.anchored ? {x:+e.anchored.x.toFixed(2), y:+e.anchored.y.toFixed(2)} : null,
     cloneA:e.cloneA || 0, clones:e.clones || 1, holdL:e.holdL || 0, holdR:e.holdR || 0, spinT:e.spinT || 0,
     aimX:+(e.aimX == null ? e.x : e.aimX).toFixed(2), aimY:+(e.aimY == null ? e.y : e.aimY).toFixed(2),
@@ -3096,34 +3122,54 @@ function serF(e) {
 }
 function publishState() {
   if (net.role !== 'host' || !net.code || !game) return;
+  const obj = {};
+  if (game.mode === 'gem') {
+    obj.loose = (game.loose || []).slice(0, 12).map(g => ({x:+g.x.toFixed(2), y:+g.y.toFixed(2)}));
+    obj.totals = game.totals || [0, 0];
+    obj.lead = game.lead == null ? -1 : game.lead;
+    obj.leadT = +(game.leadT || 0).toFixed(2);
+  } else if (game.mode === 'ball') {
+    const b = game.ball;
+    obj.score = game.score || [0, 0];
+    obj.ball = b ? {
+      x:+b.x.toFixed(2), y:+b.y.toFixed(2), vx:+(b.vx || 0).toFixed(2), vy:+(b.vy || 0).toFixed(2),
+      side:b.side == null ? -1 : b.side, holder:(b.holder && b.holder.id) || 0
+    } : 0;
+    obj.goal = game.goal ? {t:+game.goal.t.toFixed(2), team:game.goal.team, x:game.goal.x, y:game.goal.y, win:!!game.goal.win} : 0;
+  } else if (game.mode === 'hill') {
+    obj.hold = (game.hold || [0, 0]).map(v => +(+v).toFixed(2));
+    obj.hillN = game.hillN || [0, 0];
+  }
   const snap = {
     t:Date.now(),
     fighters:fighters.map(serF), mobs:mobs.filter(m => !m.dead).map(serF), bosses:bosses.map(serF),
     projs:projs.slice(0, 40).map(p => ({type:p.type, x:+p.x.toFixed(2), y:+p.y.toFixed(2), vx:+p.vx.toFixed(2), vy:+p.vy.toFixed(2), r:p.r, team:p.team})),
     zones:zones.map(z => ({x:z.x, y:z.y, r:z.r, life:z.life})),
+    obj,
     meta:{mode:game.mode, which:game.which, stage:game.stage, quota:game.quota, killed:game.killed, bossing:!!game.bossing, over:!!game.over, winTeam:game.winTeam}
   };
   fbReq('PUT', '/rooms/' + net.code + '/state', snap).catch(() => {});
 }
-const netTap = {l:0, r:0, j:0, wasL:false, wasR:false, wasJ:false, ackL:0, ackR:0, ackJ:0, gapL:false, gapR:false, gapJ:false};
+const netTap = {l:0, r:0, j:0, f:0, wasL:false, wasR:false, wasJ:false, wasF:false, ackL:0, ackR:0, ackJ:0, ackF:0, gapL:false, gapR:false, gapJ:false, gapF:false};
 function watchGuestTaps() {
   if (!(net.role === 'guest' && S.screen === 'battle')) return;
-  const l = !!mouse.l, r = !!mouse.r, j = !!(keys.Space || keys.ArrowUp);
+  const l = !!mouse.l, r = !!mouse.r, j = !!(keys.Space || keys.ArrowUp), f = !!keys.KeyF;
   if (l && !netTap.wasL) netTap.l++;
   if (r && !netTap.wasR) netTap.r++;
   if (j && !netTap.wasJ) netTap.j++;
-  netTap.wasL = l; netTap.wasR = r; netTap.wasJ = j;
+  if (f && !netTap.wasF) netTap.f++;
+  netTap.wasL = l; netTap.wasR = r; netTap.wasJ = j; netTap.wasF = f;
 }
 function takeRemote(e) {
   const id = e.owner;
   const r = id && net.remotes[id];
   const at = id && net.remoteAt[id];
   const fresh = !!(r && at && Date.now() - at < 1500);
-  const inp = {left:false, right:false, jump:false, lmb:false, rmb:false, aimX:e.aimX || e.x + (e.facing || 1) * 2, aimY:e.aimY || e.y + 1};
+  const inp = {left:false, right:false, jump:false, lmb:false, rmb:false, throw:false, aimX:e.aimX || e.x + (e.facing || 1) * 2, aimY:e.aimY || e.y + 1};
   if (!fresh) return finalizeInp(e, inp);
-  const bag = net.taps[id] || (net.taps[id] = {ackL:0, ackR:0, ackJ:0, gapL:false, gapR:false, gapJ:false, ready:false});
+  const bag = net.taps[id] || (net.taps[id] = {ackL:0, ackR:0, ackJ:0, ackF:0, gapL:false, gapR:false, gapJ:false, gapF:false, ready:false});
   if (!bag.ready) {
-    bag.ackL = r.tapL || 0; bag.ackR = r.tapR || 0; bag.ackJ = r.tapJ || 0;
+    bag.ackL = r.tapL || 0; bag.ackR = r.tapR || 0; bag.ackJ = r.tapJ || 0; bag.ackF = r.tapF || 0;
     bag.ready = true;
   }
   inp.left = !!r.left; inp.right = !!r.right; inp.jump = !!r.jump;
@@ -3141,6 +3187,7 @@ function takeRemote(e) {
   if (missed(r.tapL, 'ackL', 'gapL', inp.lmb)) inp.lmb = true;
   if (missed(r.tapR, 'ackR', 'gapR', inp.rmb)) inp.rmb = true;
   if (missed(r.tapJ, 'ackJ', 'gapJ', inp.jump)) inp.jump = true;
+  if (missed(r.tapF, 'ackF', 'gapF', false)) inp.throw = true;
   return finalizeInp(e, inp);
 }
 function sendInput(cam) {
@@ -3148,8 +3195,8 @@ function sendInput(cam) {
   const w = s2w(mouse.x, mouse.y, cam);
   const body = {
     left:!!(keys.KeyA || keys.ArrowLeft), right:!!(keys.KeyD || keys.ArrowRight),
-    jump:!!(keys.Space || keys.ArrowUp), lmb:mouse.l, rmb:mouse.r,
-    id:myId, tapL:netTap.l, tapR:netTap.r, tapJ:netTap.j, seq:++net.outSeq,
+    jump:!!(keys.Space || keys.ArrowUp), lmb:mouse.l, rmb:mouse.r, throw:!!keys.KeyF,
+    id:myId, tapL:netTap.l, tapR:netTap.r, tapJ:netTap.j, tapF:netTap.f, seq:++net.outSeq,
     aimX:+w.x.toFixed(2), aimY:+w.y.toFixed(2), ts:Date.now()
   };
   fbReq('PUT', '/rooms/' + net.code + '/in/' + myId, body).catch(() => {});
@@ -3166,6 +3213,26 @@ function applySnap(s) {
     game.stage = s.meta.stage; game.quota = s.meta.quota; game.killed = s.meta.killed;
     game.bossing = s.meta.bossing; game.over = s.meta.over; game.winTeam = s.meta.winTeam;
     game.which = s.meta.which; game.mode = s.meta.mode;
+  }
+  const o = s.obj;
+  if (o && game) {
+    if (o.loose) game.loose = o.loose;
+    if (o.totals) game.totals = o.totals;
+    if (o.lead != null) { game.lead = o.lead; game.leadT = o.leadT; }
+    if (o.score) game.score = o.score;
+    if (o.hold) game.hold = o.hold;
+    if (o.hillN) game.hillN = o.hillN;
+    if (o.goal && typeof o.goal === 'object') game.goal = o.goal;
+    else game.goal = null;
+    if (o.ball && typeof o.ball === 'object') {
+      const b = o.ball;
+      game.ball = {
+        x:b.x, y:b.y, vx:b.vx || 0, vy:b.vy || 0,
+        side:b.side == null || b.side < 0 ? null : b.side,
+        holder:b.holder ? fighters.find(f => f.id === b.holder) || null : null,
+        lock:0
+      };
+    }
   }
   net.snapAge = 0;
 }
