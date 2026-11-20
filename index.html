@@ -68,6 +68,7 @@ const PLATS = [
   {x:35.4, y:5.75, w:6.2},
   {x:39.2, y:8.55, w:4.6}
 ];
+const HILL = {x:20, y:3.65, w:6};
 const ORBS = [
   {x:5.0, y:3.85},
   {x:23.0, y:4.75},
@@ -469,7 +470,7 @@ function hurt(t, amount, opt = {}) {
 function kill(t) {
   t.dead = true; t.hp = 0; t.vx = 0;
   fx.push({x:CXx(t), y:CYy(t), r:t.kind === 'boss' ? 2.2 : 0.8, life:0.28, max:0.28, color:t.kind === 'boss' ? '#b6ff57' : '#fff'});
-  if (t.kind === 'fighter' && game && (game.mode === 'gem' || game.mode === 'ball')) {
+  if (t.kind === 'fighter' && game && (game.mode === 'gem' || game.mode === 'ball' || game.mode === 'hill')) {
     if (game.mode === 'gem') dropGems(t);
     if (game.ball && game.ball.holder === t) {
       game.ball.holder = null;
@@ -616,13 +617,13 @@ function updateSkill(e, inp, dt) {
   } else if (e.char === 'chainer') {
     if (e.anchored) {
       e.chanT += dt; e.holdL += dt; e.auraTick += dt;
-      if (e.auraTick >= 0.2) {
-        e.auraTick = 0;
+      if (e.auraTick >= 0.15) {
+        e.auraTick -= 0.15;
         for (const o of enemiesOf(e)) {
-          if (Math.hypot(CXx(o) - e.anchored.x, CYy(o) - e.anchored.y) <= 1.15) hurt(o, 1, {src:e, dot:true});
+          if (Math.hypot(CXx(o) - e.anchored.x, CYy(o) - e.anchored.y) <= 1.15) hurt(o, 2, {src:e, dot:true});
         }
       }
-      if (e.chanT >= 3 || inp.lReleased) { e.anchored = null; e.cd.ch = 2; e.holdL = 0; e.chanT = 0; }
+      if (e.chanT >= 3 || inp.lReleased) { e.anchored = null; e.cd.ch = 0.5; e.holdL = 0; e.chanT = 0; }
     } else if (inp.lmb && e.cd.ch <= 0) {
       e.holdL += dt;
       if (e.holdL > 0.18) {
@@ -739,7 +740,7 @@ function updateSkill(e, inp, dt) {
       if (e.boostT >= 3) { e.boosting = false; e.boostT = 0; e.cd.l = 3; }
     } else if (e.boosting && !inp.lmb) { e.boosting = false; e.boostT = 0; e.cd.l = 3; }
     if (inp.rPressed && e.cd.r <= 0) {
-      spawnProj({type:'arrow', x:CXx(e), y:e.y + 0.95, vx:Math.cos(aim) * 13, vy:Math.sin(aim) * 13, r:0.14, dmg:4, life:1.5, team:e.team, owner:e.id, grav:46});
+      spawnProj({type:'arrow', x:CXx(e), y:e.y + 0.95, vx:Math.cos(aim) * 13, vy:Math.sin(aim) * 13, r:0.14, dmg:4, life:1.5, team:e.team, owner:e.id, grav:10});
       e.cd.r = 0.5; markAttack(e);
     }
   } else if (e.char === 'spinner') {
@@ -1174,6 +1175,11 @@ function initObjective(kind) {
     game.leadT = 12;
     game.need = 8;
     game.ball = null;
+  } else if (kind === 'hill') {
+    game.ball = null;
+    game.loose = null;
+    game.hold = [0, 0];
+    game.need = 12;
   } else {
     game.ball = {x:BW / 2, y:6.5, vx:0, vy:0, holder:null, lock:0.4};
     game.score = [0, 0];
@@ -1214,7 +1220,7 @@ function reviveFighter(f) {
   f.holdR = 0;
 }
 function tickRespawn(dt) {
-  if (!game || (game.mode !== 'gem' && game.mode !== 'ball')) return;
+  if (!game || (game.mode !== 'gem' && game.mode !== 'ball' && game.mode !== 'hill')) return;
   for (const f of fighters) {
     if (!f.dead || !(f.respawn > 0)) continue;
     f.respawn -= dt;
@@ -1251,6 +1257,13 @@ function steerObjective(e, inp) {
       if (!foe || distC(e, foe) > 2.3) go(b.x);
       if (b.y > e.y + 1.5 && Math.abs(b.x - CXx(e)) < 1.4 && e.onGround) inp.jump = true;
     } else if (b.holder.team !== e.team) go(CXx(b.holder));
+  } else if (game.mode === 'hill') {
+    const mid = HILL.x + HILL.w / 2;
+    const foe = nearestEnemy(e);
+    if (!onHill(e) || !foe || distC(e, foe) > 2.4) {
+      go(mid);
+      if (HILL.y > e.y + 1.2 && Math.abs(CXx(e) - mid) < 3.2 && e.onGround) inp.jump = true;
+    }
   }
 }
 function throwBall(e) {
@@ -1279,6 +1292,19 @@ function throwBall(e) {
   b.x = ox + dx / len * 0.9;
   b.vx = dx / len * 18;
   b.vy = dy / len * 18;
+}
+function onHill(f) {
+  if (!f || f.dead || !f.onGround) return false;
+  return Math.abs(f.y - HILL.y) < 0.25 && CXx(f) > HILL.x && CXx(f) < HILL.x + HILL.w;
+}
+function updateHill(dt) {
+  const n = [0, 0];
+  for (const f of fighters) if (onHill(f)) n[f.team] = (n[f.team] || 0) + 1;
+  game.hillN = n;
+  if (n[0] > 0 && n[1] === 0) game.hold[0] = Math.min(game.need, (game.hold[0] || 0) + dt);
+  else if (n[1] > 0 && n[0] === 0) game.hold[1] = Math.min(game.need, (game.hold[1] || 0) + dt);
+  if (game.hold[0] >= game.need) { game.over = true; game.winTeam = 0; }
+  else if (game.hold[1] >= game.need) { game.over = true; game.winTeam = 1; }
 }
 function updateGems(dt) {
   game.mineT -= dt;
@@ -1547,6 +1573,7 @@ function simulate(dt) {
   tickRespawn(dt);
   if (game.mode === 'gem') updateGems(dt);
   if (game.mode === 'ball') updateBall(dt);
+  if (game.mode === 'hill') updateHill(dt);
   for (const m of mobs) updateMob(m, dt);
   for (const b of bosses) updateBoss(b, dt);
   for (const p of projs) updateProj(p, dt);
@@ -1582,7 +1609,7 @@ function simulate(dt) {
     if (fighters.length >= 2 && aliveTeams.size <= 1) {
       game.over = true; game.winTeam = aliveTeams.size ? [...aliveTeams][0] : -1;
     }
-  } else if (game.mode !== 'gem' && game.mode !== 'ball' && fighters.every(f => f.dead)) { game.over = true; game.winTeam = -1; }
+  } else if (game.mode !== 'gem' && game.mode !== 'ball' && game.mode !== 'hill' && fighters.every(f => f.dead)) { game.over = true; game.winTeam = -1; }
   else if (game.bossing && bosses.length && bosses.every(b => b.dead)) { game.over = true; game.winTeam = 0; }
 }
 
@@ -2014,7 +2041,7 @@ function playerPlate(e, side, keys, dy) {
   if (keys && e.cd && !e.dead) skillRows(e, left ? hx : hx + hw - 132, nameY + 20, keys);
 }
 function teamWord(e) {
-  if (!game || (game.mode !== 'duel' && game.mode !== 'gem' && game.mode !== 'ball') || !e || e.kind !== 'fighter' || e.dead) return '';
+  if (!game || (game.mode !== 'duel' && game.mode !== 'gem' && game.mode !== 'ball' && game.mode !== 'hill') || !e || e.kind !== 'fighter' || e.dead) return '';
   if (fighters.length < 2) return '';
   const me = myFighter();
   if (!me) return '';
@@ -2071,7 +2098,7 @@ function drawHUD(cam) {
     });
   };
   if (allies.length) paintSide(allies, 'left');
-  if (game && (game.mode === 'duel' || game.mode === 'gem' || game.mode === 'ball')) {
+  if (game && (game.mode === 'duel' || game.mode === 'gem' || game.mode === 'ball' || game.mode === 'hill')) {
     paintSide(foes, 'right');
     if (game.mode === 'duel' && fighters.length > 2) text(fighters.length >= 6 ? '3대3' : '2대2', W / 2, 16, 15, '#eceae4', 'center');
   }
@@ -2145,10 +2172,17 @@ function drawObjectives(cam) {
       ctx.arc(p.x, p.y, 9, 0.4, 2.4);
       ctx.stroke();
     }
+  } else if (game.mode === 'hill') {
+    const a = w2s(HILL.x, HILL.y, cam);
+    const b = w2s(HILL.x + HILL.w, HILL.y, cam);
+    ctx.fillStyle = '#e23b3b';
+    ctx.fillRect(a.x, a.y - 2, Math.max(2, b.x - a.x), 3);
+    ctx.fillRect(a.x, a.y - 16, 2, 16);
+    ctx.fillRect(b.x - 2, a.y - 16, 2, 16);
   }
 }
 function drawObjectiveHud() {
-  if (!game || (game.mode !== 'gem' && game.mode !== 'ball')) return;
+  if (!game || (game.mode !== 'gem' && game.mode !== 'ball' && game.mode !== 'hill')) return;
   const me = myFighter();
   const my = me ? me.team : 0;
   const other = my === 0 ? 1 : 0;
@@ -2158,6 +2192,13 @@ function drawObjectiveHud() {
     text((t[my] || 0) + '   :   ' + (t[other] || 0), W / 2, 36, 22, '#eceae4', 'center');
     if (game.lead === my || game.lead === other) text((game.lead === my ? '아군  ' : '상대  ') + Math.ceil(game.leadT), W / 2, 64, 18, '#e23b3b', 'center');
     else text('8개면 카운트', W / 2, 64, 13, '#8d8a82', 'center');
+  } else if (game.mode === 'hill') {
+    const h = game.hold || [0, 0];
+    const n = game.hillN || [0, 0];
+    text('점령', W / 2, 16, 15, '#eceae4', 'center');
+    text(Math.floor(h[my] || 0) + '   :   ' + Math.floor(h[other] || 0), W / 2, 36, 22, '#eceae4', 'center');
+    const tag = n[0] > 0 && n[1] > 0 ? '대치' : n[my] > 0 ? '아군' : n[other] > 0 ? '상대' : '비어 있음';
+    text(tag === '비어 있음' ? '12초' : tag, W / 2, 64, 13, tag === '상대' ? '#e23b3b' : '#8d8a82', 'center');
   } else {
     const s = game.score || [0, 0];
     text('배스킷 볼', W / 2, 16, 15, '#eceae4', 'center');
@@ -2219,7 +2260,7 @@ function renderBattle() {
       button(x, y + 92, 220, 40, '메뉴로', () => leaveMatch());
     } else {
       let title = '끝';
-      if (game.mode === 'duel' || game.mode === 'gem' || game.mode === 'ball') {
+      if (game.mode === 'duel' || game.mode === 'gem' || game.mode === 'ball' || game.mode === 'hill') {
         if (game.winTeam == null || game.winTeam < 0) title = '무승부';
         else if (fighters.length > 2) {
           const mine = myFighter();
@@ -2246,12 +2287,12 @@ function renderBattle() {
           button(x, y, 220, 40, '단계 선택', () => { S.me = game.setup.char; S.which = game.which; S.screen = 'stages'; game = null; });
           y += 44;
         }
-      } else if ((game.mode === 'duel' || game.mode === 'gem' || game.mode === 'ball') && !net.role) {
+      } else if ((game.mode === 'duel' || game.mode === 'gem' || game.mode === 'ball' || game.mode === 'hill') && !net.role) {
         button(x, y, 220, 40, '다시', () => {
           const s = game.setup;
           if (s && s.type === 'team') {
             startTeam(s.players);
-            if (s.mode === 'gem' || s.mode === 'ball') initObjective(s.mode);
+            if (s.mode === 'gem' || s.mode === 'ball' || s.mode === 'hill') initObjective(s.mode);
           } else startDuel(s.c1, s.c2, s.opt);
         });
         y += 44;
@@ -2454,6 +2495,7 @@ function frameMenu() {
     button(x, 256, 260, 40, '3대3', () => openPick('내 캐릭터', me => startAiTeam(6, me)));
     button(x, 312, 260, 40, '잼 그랩', () => openPick('내 캐릭터', me => startObjective('gem', me)));
     button(x, 356, 260, 40, '배스킷 볼', () => openPick('내 캐릭터', me => startObjective('ball', me)));
+    button(x, 400, 260, 40, '점령', () => openPick('내 캐릭터', me => startObjective('hill', me)));
     button(x, H - 72, 120, 40, '뒤로', () => { S.screen = 'title'; });
   } else if (S.screen === 'help') {
     showName(false);
@@ -2472,6 +2514,7 @@ function frameMenu() {
       ['2P', '방향키, 위 점프, K 좌클릭, L 우클릭'],
       ['잼 그랩', '3대3. 보석을 주워 8개면 카운트. 죽으면 떨어뜨림'],
       ['배스킷 볼', '3대3. 골이 들어가면 2초 뒤 모두 스폰에서 다시 시작. 5점'],
+      ['점령', '3대3. 가운데 구역을 12초 지키면 승리. 양쪽이 있으면 멈춤'],
       ['계정', '승리하면 코인 4~7, PP 4~7. 30%는 둘 다. 영웅 창에서 상승']
     ];
     const colW = Math.min(460, (W - x * 2 - 40) / 2);
