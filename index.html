@@ -454,11 +454,7 @@ function nearestTo(x, y, team) {
 function byId(id) { return bodies().find(e => e.id === id) || null; }
 
 function hurt(t, amount, opt = {}) {
-  if (net.role === 'guest') {
-    if (!t || t.dead || amount <= 0) return false;
-    nums.push({x:CXx(t), y:t.y + t.h + 0.2, vy:2.2, life:0.55, text:String(amount), color:opt.dot ? '#ffd0d0' : '#fff'});
-    return false;
-  }
+  if (net.role === 'guest') return false;
   if (!t || t.dead || amount <= 0) return false;
   if (opt.hid) {
     t._hits = t._hits || {};
@@ -1612,9 +1608,15 @@ function adoptGuestPos(e) {
   if (e._netSeq === r.seq) return;
   e._netSeq = r.seq;
   const gap = Math.hypot(r.x - e.x, r.y - e.y);
+  const down = !!(r.lmb || r.rmb || r.throw);
+  const attack = down || down !== !!e._held || (r.tapL || 0) !== (e._tapL || 0) || (r.tapR || 0) !== (e._tapR || 0) || (r.tapF || 0) !== (e._tapF || 0);
+  e._held = down;
+  e._tapL = r.tapL || 0;
+  e._tapR = r.tapR || 0;
+  e._tapF = r.tapF || 0;
   const sp = Math.hypot(r.vx || 0, r.vy || 0);
   const ahead = sp > 1 && (e.x - r.x) * (r.vx || 0) + (e.y - r.y) * (r.vy || 0) > 0;
-  if (ahead && gap < 6) return;
+  if (!attack && ahead && gap < 1.5) return;
   e.x = r.x;
   e.y = r.y;
   if (typeof r.vx === 'number') e.vx = r.vx;
@@ -3416,11 +3418,7 @@ function applySnap(s) {
       if (!was) continue;
       const dx = was.x - f.x, dy = was.y - f.y;
       const dist = Math.hypot(dx, dy);
-      if (dist < 5) {
-        const keep = dist < 0.8 ? 0.72 : 0.35;
-        f.x += dx * keep;
-        f.y += dy * keep;
-      }
+      if (dist < 2) { f.x += dx * 0.2; f.y += dy * 0.2; }
     }
     if (local && game && game.ball && game.ball.holder && game.ball.holder.id === local.id) game.ball.holder = local;
   }
