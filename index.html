@@ -1258,11 +1258,38 @@ function steerObjective(e, inp) {
       if (b.y > e.y + 1.5 && Math.abs(b.x - CXx(e)) < 1.4 && e.onGround) inp.jump = true;
     } else if (b.holder.team !== e.team) go(CXx(b.holder));
   } else if (game.mode === 'hill') {
-    const mid = HILL.x + HILL.w / 2;
+    const lo = HILL.x + 0.85, hi = HILL.x + HILL.w - 0.85;
+    const spots = [HILL.x + HILL.w / 2, lo + 0.3, hi - 0.3];
+    let goal = spots[(e.slot || 0) % spots.length];
     const foe = nearestEnemy(e);
-    if (!onHill(e) || !foe || distC(e, foe) > 2.4) {
-      go(mid);
-      if (HILL.y > e.y + 1.2 && Math.abs(CXx(e) - mid) < 3.2 && e.onGround) inp.jump = true;
+    const hop = (air) => {
+      if (e.jumpCd > 0 || (!e.onGround && !air)) return;
+      inp.jump = true;
+      inp.jumpEdge = !e._pj;
+      e._pj = true;
+      if (inp.jumpEdge) e.jumpCd = 0.22;
+    };
+    if (onHill(e)) {
+      if (foe && onHill(foe)) goal = clamp(CXx(foe), lo, hi);
+      go(goal);
+      inp.jump = false;
+      inp.jumpEdge = false;
+      e._pj = false;
+    } else if (e.onGround && e.y > HILL.y + 0.6) {
+      go(CXx(e) < goal ? 17.2 : 28.8);
+      inp.jump = false;
+      inp.jumpEdge = false;
+      e._pj = false;
+    } else {
+      go(goal);
+      const under = CXx(e) > 14.4 && CXx(e) < 31.6 && e.y < HILL.y - 0.35;
+      const dir = inp.right ? 1 : inp.left ? -1 : 0;
+      const probe = dir > 0 ? e.x + e.w + 0.25 : e.x - 0.25;
+      const ahead = !!dir && SOLIDS.some(s => probe >= s.x && probe <= s.x + s.w && e.y < s.y + s.h - 0.05);
+      const blocked = !!e.wall && e.y < HILL.y + 0.4;
+      if ((under || ahead) && e.onGround) hop(false);
+      else if (blocked || ahead) hop(true);
+      else e._pj = false;
     }
   }
 }
