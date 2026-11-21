@@ -79,7 +79,14 @@ function burst(dur, gain, freq) {
   src.connect(f); f.connect(g); g.connect(a.destination);
   src.start(t); src.stop(t + dur + 0.02);
 }
+let sound = localStorage.getItem('ground-sound') !== '0';
+const music = {mode:'', next:0, step:0, nodes:[]};
+const BED = {
+  menu:[110, 164.81, 146.83, 130.81, 110, 98, 130.81, 146.83],
+  battle:[110, 130.81, 98, 146.83, 87.31, 130.81, 110, 123.47]
+};
 function sfx(name) {
+  if (!sound) return;
   if (name === 'hit') { burst(0.05, 0.07, 1600); tone(190, 0.07, 'sine', 0.05, 70); }
   else if (name === 'jump') tone(320, 0.06, 'sine', 0.035, 480);
   else if (name === 'dash') { burst(0.07, 0.05, 500); tone(150, 0.08, 'sine', 0.05, 70); }
@@ -88,8 +95,66 @@ function sfx(name) {
   else if (name === 'stop') tone(240, 0.08, 'sine', 0.04, 90);
   else if (name === 'slam') { burst(0.1, 0.08, 280); tone(90, 0.14, 'sine', 0.07, 50); }
   else if (name === 'heal') { tone(392, 0.1, 'sine', 0.04, 520); tone(523, 0.14, 'sine', 0.035, 0, 0.06); }
+  else if (name === 'throw') tone(300, 0.08, 'sine', 0.03, 160);
+  else if (name === 'catch') tone(520, 0.04, 'sine', 0.028);
+  else if (name === 'ko') tone(110, 0.18, 'sine', 0.05, 48);
+  else if (name === 'goal') { tone(392, 0.12, 'sine', 0.05, 523); tone(659, 0.22, 'sine', 0.04, 0, 0.1); }
+  else if (name === 'win') { tone(392, 0.12, 'sine', 0.045); tone(494, 0.14, 'sine', 0.04, 0, 0.1); tone(587, 0.24, 'sine', 0.04, 0, 0.2); }
+  else if (name === 'lose') { tone(220, 0.16, 'sine', 0.04, 110); tone(164.81, 0.24, 'sine', 0.035, 0, 0.12); }
+}
+function stopMusic() {
+  for (const n of music.nodes) { try { n.stop(); } catch (e) {} }
+  music.nodes = [];
+  music.mode = '';
+}
+function toggleSound() {
+  if (sound) sfx('ui');
+  sound = !sound;
+  localStorage.setItem('ground-sound', sound ? '1' : '0');
+  if (!sound) stopMusic();
+}
+function tickMusic() {
+  if (!sound || !actx || actx.state !== 'running') {
+    if (music.mode) stopMusic();
+    return;
+  }
+  const mode = S.screen === 'battle' ? 'battle' : 'menu';
+  if (music.mode !== mode) {
+    stopMusic();
+    music.mode = mode;
+    music.step = 0;
+    music.next = actx.currentTime + 0.06;
+    const o = actx.createOscillator();
+    const g = actx.createGain();
+    o.type = 'sine';
+    o.frequency.value = mode === 'battle' ? 49 : 55;
+    g.gain.value = 0.02;
+    o.connect(g); g.connect(actx.destination);
+    o.start();
+    music.nodes.push(o);
+  }
+  const now = actx.currentTime;
+  const phrase = BED[mode];
+  const gap = mode === 'battle' ? 0.52 : 0.84;
+  while (music.next < now + 0.4) {
+    const delay = Math.max(0, music.next - now);
+    const f = phrase[music.step % phrase.length];
+    tone(f, mode === 'battle' ? 0.46 : 0.9, 'sine', 0.03, f * 0.96, delay);
+    if (mode === 'battle' && music.step % 2 === 0) tone(73, 0.08, 'sine', 0.018, 52, delay);
+    music.step++;
+    music.next += gap;
+  }
+}
+function ear() {
+  if (!game) return;
+  const marking = game.goal ? 1 : 0;
+  if (marking && !game._earGoal) sfx('goal');
+  game._earGoal = marking;
+  if (game.over && !game._earEnd) sfx(playerWon() ? 'win' : 'lose');
+  game._earEnd = game.over ? 1 : 0;
 }
 function gadSfx(id) {
+  if (!sound) return;
   if (id === 'charger') { burst(0.08, 0.06, 420); tone(140, 0.1, 'sine', 0.06, 60); }
   else if (id === 'chainer') { tone(480, 0.07, 'triangle', 0.04, 860); tone(720, 0.06, 'sine', 0.025, 0, 0.04); }
   else if (id === 'howler') { burst(0.22, 0.07, 1100); tone(520, 0.18, 'triangle', 0.03, 180); }
@@ -369,6 +434,7 @@ addEventListener('keydown', e => {
   keys[e.code] = true;
   if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
   if (e.code === 'Escape' && S.screen === 'battle') S.pause = !S.pause;
+  if ((e.code === 'KeyM') && !e.repeat && document.activeElement !== nameEl) toggleSound();
   if (S.screen === 'join' && document.activeElement !== nameEl) {
     if (e.code === 'Backspace') { S.code = S.code.slice(0, -1); e.preventDefault(); }
     else if (e.code === 'Enter' && S.code.length === 4) { tryJoin(); e.preventDefault(); }
@@ -625,7 +691,8 @@ function kill(t) {
   }
   t.dead = true; t.hp = 0; t.vx = 0;
   fx.push({x:CXx(t), y:CYy(t), r:t.kind === 'boss' ? 2.2 : 0.8, life:0.28, max:0.28, color:t.kind === 'boss' ? '#b6ff57' : '#fff'});
-  if (t.kind === 'fighter') noteKill(t);
+  if (t.kind === 'fighter') { noteKill(t); sfx('ko'); }
+  else if (t.kind === 'boss') sfx('ko');
   if (t.kind === 'fighter' && game && (game.mode === 'gem' || game.mode === 'ball' || game.mode === 'hill')) {
     if (game.mode === 'gem') dropGems(t);
     if (game.ball && game.ball.holder === t) {
@@ -2163,6 +2230,7 @@ function throwBall(e) {
   const lob = lobTo(ox, oy, tx, ty);
   b.vx = lob.vx;
   b.vy = lob.vy;
+  if (!e.ai && (!net.role || e.owner === myId)) sfx('throw');
 }
 function onHill(f) {
   if (!f || f.dead || !f.onGround) return false;
@@ -2338,6 +2406,7 @@ function updateBall(dt) {
         b.side = f.team;
         b.shot = 0;
         b.by = null;
+        if (!f.ai && (!net.role || f.owner === myId)) sfx('catch');
         break;
       }
     }
@@ -3790,6 +3859,7 @@ function frameMenu() {
     button(x, menuY + 138, 240, 42, '영웅', () => openPick('영웅', null));
     if (acct.user) button(x, H - 72, 160, 40, '로그아웃', () => googleLogout());
     else button(x, H - 72, 220, 40, acct.busy ? '로그인 중' : 'Google로 로그인', () => googleLogin(), {off:acct.busy});
+    button(x + (acct.user ? 176 : 236), H - 72, 120, 40, sound ? '소리 켜짐' : '소리 꺼짐', toggleSound, {on:sound});
     if (acct.msg) text(acct.msg, x, H - 104, 13, '#e23b3b');
   } else if (S.screen === 'aimode') {
     showName(false);
@@ -3826,6 +3896,7 @@ function frameMenu() {
       ['차지', 'E. 9레벨. 이름 앞 숫자만큼 맞추면 사용. 쓰면 체력 5'],
       ['하이퍼', 'Shift. 12레벨. 차지를 3번 쓰면 사용'],
       ['계정', '승리하면 코인 4~7, PP 4~7. 30%는 둘 다. 영웅 창에서 상승'],
+      ['소리', 'M. 배경음과 효과음. 타이틀에서도 끔'],
       ['교환', '10 코인으로 5 PP. 10 PP로 5 코인']
     ];
     const colW = Math.min(460, (W - x * 2 - 40) / 2);
@@ -4818,6 +4889,8 @@ function loop(now) {
     }
   }
   prevK.Space = keys.Space;
+  ear();
+  tickMusic();
   requestAnimationFrame(loop);
 }
 
