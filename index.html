@@ -2040,6 +2040,7 @@ function throwBall(e) {
   const ox = CXx(e), oy = e.y + e.h * 0.65;
   b.holder = null;
   b.side = e.team;
+  b.shot = 1;
   b.y = oy;
   b.lock = 0.4;
   e.throwCd = 0.75;
@@ -2112,12 +2113,6 @@ function updateGems(dt) {
     game.leadT = 12;
   }
 }
-function touchesHoop(f, hoop) {
-  const z = (camCache && camCache.z) || 40;
-  const left = hoop.x - (RIM_W + 4) / z, right = hoop.x + (RIM_W + 4) / z;
-  const top = hoop.y + 6 / z, bottom = hoop.y - (NET_H + 4) / z;
-  return f.x < right && f.x + f.w > left && f.y < top && f.y + f.h > bottom;
-}
 function beginGoal(team, hoop, who) {
   if (!game || game.goal || game.over) return;
   game.score[team] = (game.score[team] || 0) + 1;
@@ -2167,6 +2162,7 @@ function kickoff() {
     game.ball.vx = 0;
     game.ball.vy = 0;
     game.ball.side = null;
+    game.ball.shot = 0;
     game.ball.lock = 0.6;
   }
 }
@@ -2175,13 +2171,6 @@ function updateBall(dt) {
   if (!b) return;
   b.lock = Math.max(0, (b.lock || 0) - dt);
   for (const f of fighters) f.throwCd = Math.max(0, (f.throwCd || 0) - dt);
-  for (const f of fighters) {
-    if (f.dead) { f.dunking = false; continue; }
-    const hoop = HOOPS.find(h => touchesHoop(f, h));
-    if (hoop && hoop.team === f.team && b.holder === f) {
-      if (!f.dunking) { beginGoal(f.team, hoop, f); return; }
-    } else f.dunking = false;
-  }
   if (game.over) return;
   const holder = b.holder;
   if (holder && !holder.dead) {
@@ -2219,7 +2208,7 @@ function updateBall(dt) {
   }
   if (b.lock <= 0) {
     for (const hoop of HOOPS) {
-      if (prevY > hoop.y && b.y <= hoop.y && Math.abs(b.x - hoop.x) < 0.85 && b.vy < 0) {
+      if (b.shot && prevY > hoop.y && b.y <= hoop.y && Math.abs(b.x - hoop.x) < 0.85 && b.vy < 0) {
         if (b.side !== hoop.team) {
           b.y = hoop.y + 0.2;
           b.vy = Math.max(5, Math.abs(b.vy) * 0.55);
@@ -2235,6 +2224,7 @@ function updateBall(dt) {
       if (Math.hypot(CXx(f) - b.x, (f.y + f.h * 0.55) - b.y) < 1) {
         b.holder = f;
         b.side = f.team;
+        b.shot = 0;
         break;
       }
     }
