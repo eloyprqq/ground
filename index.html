@@ -2043,7 +2043,7 @@ const HOOPS = [
   {x:2.6, y:5.5, team:1, side:-1},
   {x:BW - 2.6, y:5.5, team:0, side:1}
 ];
-const RIM_W = 18, NET_H = 16;
+const RIM_HALF = 1.15, BALL_R = 0.22;
 function initObjective(kind) {
   game.mode = kind;
   game.rules = {adds:false, rewards:false};
@@ -2225,7 +2225,7 @@ function throwBall(e) {
     tx = e.aimX == null ? ox + e.facing * 8 : e.aimX;
     ty = e.aimY == null ? oy + 4 : e.aimY;
     const mine = HOOPS.find(h => h.team === e.team);
-    if (mine && Math.hypot(tx - mine.x, ty - mine.y) < 1.8) { tx = mine.x; ty = mine.y; }
+    if (mine && Math.hypot(tx - mine.x, ty - mine.y) < 2.8) { tx = mine.x; ty = mine.y; }
   }
   const lob = lobTo(ox, oy, tx, ty);
   b.vx = lob.vx;
@@ -2361,21 +2361,24 @@ function updateBall(dt) {
   if (b.vy < -16) b.vy = -16;
   b.x += b.vx * dt;
   b.y += b.vy * dt;
-  if (b.lock <= 0 && b.shot && b.vy < 0 && prevY > b.y) {
+  if (b.lock <= 0 && b.shot && b.vy < 0) {
     for (const hoop of HOOPS) {
-      if (!(prevY > hoop.y && b.y <= hoop.y)) continue;
       const span = prevY - b.y;
-      const u = span > 0.0001 ? (prevY - hoop.y) / span : 1;
-      const xAt = prevX + (b.x - prevX) * clamp(u, 0, 1);
-      if (Math.abs(xAt - hoop.x) >= 1.05) continue;
+      const u = span > 0.0001 && prevY > hoop.y && b.y <= hoop.y ? clamp((prevY - hoop.y) / span, 0, 1) : 1;
+      const xAt = prevX + (b.x - prevX) * u;
+      const xClose = Math.abs(xAt - hoop.x) <= RIM_HALF + BALL_R || Math.abs(b.x - hoop.x) <= RIM_HALF + BALL_R;
+      if (!xClose) continue;
+      const touched = prevY + BALL_R > hoop.y && b.y - BALL_R <= hoop.y;
+      const inNet = b.y <= hoop.y && b.y >= hoop.y - 0.95;
+      if (!touched && !inNet) continue;
       if (b.side !== hoop.team) {
-        b.x = xAt;
-        b.y = hoop.y + 0.2;
+        b.x = hoop.x + Math.sign(b.x - hoop.x || b.vx || 1) * (RIM_HALF + 0.15);
+        b.y = Math.max(b.y, hoop.y + 0.15);
         b.vy = Math.max(5, Math.abs(b.vy) * 0.55);
         b.vx *= 0.45;
         return;
       }
-      b.x = xAt;
+      b.x = hoop.x;
       beginGoal(hoop.team, hoop, b.by);
       return;
     }
@@ -2398,7 +2401,8 @@ function updateBall(dt) {
       else { b.x = s.x + s.w + 0.2; b.vx = Math.abs(b.vx) * 0.6; }
     }
   }
-  if (b.lock <= 0 && !game.goal) {
+  const inMouth = b.shot && HOOPS.some(h => h.team === b.side && Math.abs(b.x - h.x) <= RIM_HALF + 0.45 && b.y < h.y + 0.85 && b.y > h.y - 1.15);
+  if (b.lock <= 0 && !game.goal && !inMouth) {
     for (const f of fighters) {
       if (f.dead) continue;
       if (Math.hypot(CXx(f) - b.x, (f.y + f.h * 0.55) - b.y) < 1) {
@@ -3506,24 +3510,35 @@ function drawObjectives(cam) {
   } else if (game.mode === 'ball') {
     for (const hoop of HOOPS) {
       const rim = w2s(hoop.x, hoop.y, cam);
+      const lipL = w2s(hoop.x - RIM_HALF, hoop.y, cam);
+      const lipR = w2s(hoop.x + RIM_HALF, hoop.y, cam);
       const top = w2s(hoop.x + hoop.side * 0.15, hoop.y + 2.3, cam);
+      const net = w2s(hoop.x, hoop.y - 0.7, cam);
       ctx.fillStyle = '#d0d4dc';
       ctx.fillRect(top.x - 3, top.y, 6, rim.y - top.y);
       const mine = myFighter();
       ctx.strokeStyle = mine && hoop.team === mine.team ? '#e23b3b' : '#8d8a82';
       ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.moveTo(rim.x - RIM_W, rim.y);
-      ctx.lineTo(rim.x + RIM_W, rim.y);
+      ctx.moveTo(lipL.x, lipL.y);
+      ctx.lineTo(lipR.x, lipR.y);
       ctx.stroke();
       ctx.strokeStyle = 'rgba(236,234,228,.45)';
       ctx.lineWidth = 1;
       for (let i = -2; i <= 2; i++) {
+        const a = w2s(hoop.x + i * RIM_HALF * 0.4, hoop.y, cam);
+        const c = w2s(hoop.x + i * RIM_HALF * 0.22, hoop.y - 0.7, cam);
         ctx.beginPath();
-        ctx.moveTo(rim.x + i * 7, rim.y);
-        ctx.lineTo(rim.x + i * 4, rim.y + NET_H);
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(c.x, c.y);
         ctx.stroke();
       }
+      ctx.beginPath();
+      ctx.moveTo(lipL.x, lipL.y);
+      ctx.lineTo(net.x - (lipR.x - lipL.x) * 0.22, net.y);
+      ctx.lineTo(net.x + (lipR.x - lipL.x) * 0.22, net.y);
+      ctx.lineTo(lipR.x, lipR.y);
+      ctx.stroke();
     }
     if (game.ball) {
       const p = w2s(game.ball.x, game.ball.y, cam);
