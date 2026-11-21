@@ -2178,7 +2178,7 @@ function updateBall(dt) {
   for (const f of fighters) {
     if (f.dead) { f.dunking = false; continue; }
     const hoop = HOOPS.find(h => touchesHoop(f, h));
-    if (hoop && hoop.team === f.team) {
+    if (hoop && hoop.team === f.team && b.holder === f) {
       if (!f.dunking) { beginGoal(f.team, hoop, f); return; }
     } else f.dunking = false;
   }
