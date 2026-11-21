@@ -759,7 +759,7 @@ function distSeg(px, py, x0, y0, x1, y1) {
   return Math.hypot(px - (x0 + dx * u), py - (y0 + dy * u));
 }
 function canGad(e) {
-  return !!e && !e.dead && !e.ai && (e.gadLv || 0) >= 5 && (e.gadLeft || 0) > 0 && !(e.gadCd > 0) && !(e.stopT > 0) && !(e.gadCast > 0);
+  return !!e && !e.dead && (e.gadLv || 0) >= 5 && (e.gadLeft || 0) > 0 && !(e.gadCd > 0) && !(e.stopT > 0) && !(e.gadCast > 0);
 }
 function castGadget(e) {
   const foes = liveFoes(e);
@@ -841,7 +841,7 @@ function castGadget(e) {
   return false;
 }
 function tryGadget(e) {
-  if (e && !e.dead && !e.ai && e.char === 'timer' && (e.gadLv || 0) >= 5 && e.savedHp >= 0) {
+  if (e && !e.dead && e.char === 'timer' && (e.gadLv || 0) >= 5 && e.savedHp >= 0) {
     e.hp = Math.max(1, Math.min(e.maxHp, e.savedHp));
     e.savedHp = -1;
     sfx('heal');
@@ -852,7 +852,7 @@ function tryGadget(e) {
     if (e && !e.dead && !e.ai && (e.gadLv || 0) >= 5) sfx('deny');
     return;
   }
-  if (!castGadget(e)) { sfx('deny'); return; }
+  if (!castGadget(e)) { if (!e.ai) sfx('deny'); return; }
   e.gadLeft -= 1;
   e.gadCd = 10;
   gadSfx(e.char);
@@ -1113,9 +1113,9 @@ function restoreTeam(e) {
   fx.push({x:CXx(e), y:CYy(e), r:1.6, life:0.24, max:0.24, color:'#d08a6a', out:1});
 }
 function tryCharge(e) {
-  if (e && !e.dead && !e.ai && e.char === 'timer' && e.teamSnap) { restoreTeam(e); return; }
+  if (e && !e.dead && e.char === 'timer' && e.teamSnap) { restoreTeam(e); return; }
   const need = CHARGE_NEED[e.char];
-  if (!e || e.dead || e.ai || !need || (e.gadLv || 0) < 9 || (e.charge || 0) < need || e.stopT > 0 || e.gadCast > 0 || e.chgT > 0 || e.spinGo > 0) {
+  if (!e || e.dead || !need || (e.gadLv || 0) < 9 || (e.charge || 0) < need || e.stopT > 0 || e.gadCast > 0 || e.chgT > 0 || e.spinGo > 0) {
     if (e && !e.dead && !e.ai && need && (e.gadLv || 0) >= 9) sfx('deny');
     return;
   }
@@ -1123,7 +1123,7 @@ function tryCharge(e) {
   castCharge(e, false);
 }
 function tryHyper(e) {
-  if (!e || e.dead || e.ai || !HYPER[e.char] || (e.gadLv || 0) < 12 || (e.chargeUsed || 0) < 3 || e.stopT > 0 || e.chgT > 0 || e.spinGo > 0) {
+  if (!e || e.dead || !HYPER[e.char] || (e.gadLv || 0) < 12 || (e.chargeUsed || 0) < 3 || e.stopT > 0 || e.chgT > 0 || e.spinGo > 0) {
     if (e && !e.dead && !e.ai && HYPER[e.char] && (e.gadLv || 0) >= 12) sfx('deny');
     return;
   }
@@ -1441,10 +1441,46 @@ function humanInp(e, who, cam) {
   }
   return finalizeInp(e, inp);
 }
+const AI_RATE = [null, {g:0.7, c:0.5, h:0.1}, {g:0.9, c:0.7, h:0.2}, {g:1, c:0.8, h:0.4}];
+function playerCastTier() {
+  const me = fighters.find(f => f && !f.ai && !f.dead);
+  if (!me) return 0;
+  const need = CHARGE_NEED[me.char];
+  const hyper = !!(HYPER[me.char] && (me.gadLv || 0) >= 12 && (me.chargeUsed || 0) >= 3);
+  const charge = !!(need && (me.gadLv || 0) >= 9 && ((me.charge || 0) >= need || (me.char === 'timer' && me.teamSnap)));
+  const gad = (me.gadLv || 0) >= 5 && (me.gadLeft || 0) > 0 && !(me.gadCd > 0);
+  if (hyper) return 3;
+  if (charge) return 2;
+  if (gad) return 1;
+  return 0;
+}
+function aiReadyCharge(e) {
+  const need = CHARGE_NEED[e.char];
+  return !!(need && (e.gadLv || 0) >= 9 && ((e.charge || 0) >= need || (e.char === 'timer' && e.teamSnap)) && !(e.stopT > 0) && !(e.gadCast > 0) && !(e.chgT > 0) && !(e.spinGo > 0));
+}
+function aiReadyHyper(e) {
+  return !!(HYPER[e.char] && (e.gadLv || 0) >= 12 && (e.chargeUsed || 0) >= 3 && !(e.stopT > 0) && !(e.chgT > 0) && !(e.spinGo > 0));
+}
+function aiCastRoll(e, inp) {
+  const now = performance.now();
+  const row = AI_RATE[playerCastTier()];
+  const roll = (key, ok, p) => {
+    if (!ok || !row) return;
+    if (now < (e.mem[key] || 0)) return;
+    e.mem[key] = now + 1200;
+    if (Math.random() < p) e.mem[key + 'Y'] = 1;
+  };
+  roll('hAt', aiReadyHyper(e), row ? row.h : 0);
+  roll('cAt', aiReadyCharge(e), row ? row.c : 0);
+  roll('gAt', canGad(e), row ? row.g : 0);
+  if (e.mem.hAtY && aiReadyHyper(e)) { inp.hyper = true; e.mem.hAtY = 0; return; }
+  if (e.mem.cAtY && aiReadyCharge(e)) { inp.chg = true; e.mem.cAtY = 0; return; }
+  if (e.mem.gAtY && canGad(e)) { inp.gad = true; e.mem.gAtY = 0; }
+}
 function aiInp(e) {
   const inp = {left:false, right:false, jump:false, lmb:false, rmb:false, aimX:e.x + e.facing * 3, aimY:e.y + 1};
   const t = nearestEnemy(e);
-  if (!t) return finalizeInp(e, inp);
+  if (!t) { aiCastRoll(e, inp); return finalizeInp(e, inp); }
   const dx = CXx(t) - CXx(e), dy = CYy(t) - CYy(e), dist = Math.hypot(dx, dy) || 1;
   inp.aimX = CXx(t); inp.aimY = CYy(t);
   const toward = () => { if (dx > 0.35) inp.right = true; else if (dx < -0.35) inp.left = true; };
@@ -1494,6 +1530,7 @@ function aiInp(e) {
     if (!(e.bombT > 0) && e.cd.l <= 0 && dist < 8 && !e._pl) inp.lmb = true;
     if (e.bombT > 0 && e.bombT < 0.45 && !(e.backT > 0) && e.cd.r <= 0 && dist > 1.2 && dist <= 5.2 && !e._pr) inp.rmb = true;
   }
+  aiCastRoll(e, inp);
   return finalizeInp(e, inp);
 }
 
@@ -1849,6 +1886,7 @@ function startTeam(players) {
     f.gems = 0;
     f.ai = p.ai ? true : (online ? false : i !== 0);
     f.gadLv = p.id === myId ? (acct.rise[f.char] || 0) : (p.lv || 0);
+    if (f.ai) f.gadLv = 12;
     f.gadLeft = 3;
     return f;
   });
@@ -2239,6 +2277,7 @@ function startDuel(c1, c2, opt = {}) {
   p1.gadLv = acct.rise[c1] || 0;
   p1.gadLeft = 3;
   p2.gadLeft = 3;
+  if (p2.ai) p2.gadLv = 12;
   fighters = [p1, p2];
   game = {
     mode:'duel', which:null, stage:0, rules:{adds:true, rewards:true},
