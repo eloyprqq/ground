@@ -284,6 +284,21 @@ function raiseChar(id) {
   acct.rise[id] = lv + 1;
   saveAccount();
 }
+function trade(coinToPp) {
+  if (!acct.user || !acct.ready) { acct.msg = '로그인이 필요합니다'; return; }
+  if (coinToPp) {
+    if (acct.coin < 10) { acct.msg = '코인이 더 필요합니다'; return; }
+    acct.coin -= 10;
+    acct.pp += 5;
+    acct.msg = '10 코인을 5 PP로 바꿨습니다';
+  } else {
+    if (acct.pp < 10) { acct.msg = 'PP가 더 필요합니다'; return; }
+    acct.pp -= 10;
+    acct.coin += 5;
+    acct.msg = '10 PP를 5 코인으로 바꿨습니다';
+  }
+  saveAccount();
+}
 function playerWon() {
   if (!game || game.winTeam == null || game.winTeam < 0) return false;
   if (game.mode === 'raid') return game.winTeam === 0;
@@ -610,6 +625,7 @@ function kill(t) {
   }
   t.dead = true; t.hp = 0; t.vx = 0;
   fx.push({x:CXx(t), y:CYy(t), r:t.kind === 'boss' ? 2.2 : 0.8, life:0.28, max:0.28, color:t.kind === 'boss' ? '#b6ff57' : '#fff'});
+  if (t.kind === 'fighter') noteKill(t);
   if (t.kind === 'fighter' && game && (game.mode === 'gem' || game.mode === 'ball' || game.mode === 'hill')) {
     if (game.mode === 'gem') dropGems(t);
     if (game.ball && game.ball.holder === t) {
@@ -630,6 +646,40 @@ function kill(t) {
       nums.push({x:CXx(src), y:src.y + src.h + 0.6, vy:1.4, life:0.9, text:'+3  ♥+4', color:'#ffe14a'});
     }
   }
+}
+function killerName(src) {
+  if (!src) return '';
+  if (src.kind === 'sum') {
+    const o = fighters.find(f => f.id === src.owner);
+    return o && o.name ? o.name : '분신';
+  }
+  if (src.kind === 'mob') return src.sub === 'pint' ? '핀트' : src.sub === 'rusher' ? '돌진' : src.sub === 'launcher' ? '발사' : '잡몹';
+  return src.name || '';
+}
+function noteKill(t) {
+  if (!game || net.role === 'guest') return;
+  const a = killerName(t.lastSrc);
+  game.kills = game.kills || [];
+  game.kills.unshift({a, b:t.name || '', at:Date.now()});
+  game.kills = game.kills.filter(k => Date.now() - k.at < 4500).slice(0, 5);
+}
+function killFeed() {
+  if (!game || !game.kills) return [];
+  const now = Date.now();
+  return game.kills.filter(k => now - k.at < 4500).slice(0, 5);
+}
+function drawKillFeed() {
+  const list = killFeed();
+  list.forEach((k, i) => {
+    const left = 4.5 - (Date.now() - k.at) / 1000;
+    ctx.globalAlpha = Math.max(0, Math.min(1, left));
+    const y = 10 + i * 22;
+    ctx.fillStyle = '#e23b3b';
+    ctx.fillRect(28, y + 8, 10, 2);
+    text(k.a ? (k.a + '  처치  ' + k.b) : (k.b + '  사망'), 44, y, 14, '#eceae4');
+    ctx.globalAlpha = 1;
+  });
+  return list.length ? 8 + list.length * 22 : 0;
 }
 function markAttack(e) { e.slowA = 0.4; e.lastCombat = T; }
 
@@ -2072,6 +2122,18 @@ function steerObjective(e, inp) {
     }
   }
 }
+function lobTo(ox, oy, tx, ty) {
+  const dx = tx - ox, dy = ty - oy;
+  const dist = Math.max(0.8, Math.hypot(dx, dy));
+  let t = clamp(dist / 10, 0.42, 1.65);
+  let vx = dx / t, vy = dy / t + 10 * t;
+  for (let i = 0; i < 6 && vy - 20 * t > -2; i++) {
+    t += 0.14;
+    vx = dx / t;
+    vy = dy / t + 10 * t;
+  }
+  return {vx, vy};
+}
 function throwBall(e) {
   const b = game.ball;
   if (!b || b.holder !== e || e.dead) return;
@@ -2079,26 +2141,24 @@ function throwBall(e) {
   b.holder = null;
   b.side = e.team;
   b.shot = 1;
+  b.by = e;
+  b.x = ox;
   b.y = oy;
-  b.lock = 0.4;
+  b.lock = 0.28;
   e.throwCd = 0.75;
+  let tx, ty;
   if (e.ai) {
     const hoop = HOOPS.find(h => h.team === e.team) || HOOPS[0];
-    const dx = hoop.x - ox;
-    const dist = Math.max(2, Math.abs(dx));
-    const vx = clamp(dist * 0.85, 9, 15);
-    const t = dist / vx;
-    b.vx = Math.sign(dx || e.facing || 1) * vx;
-    b.vy = clamp(3.5 / t + 10 * t, 8, 16);
-    b.x = ox + Math.sign(b.vx) * 0.8;
-    return;
+    tx = hoop.x; ty = hoop.y;
+  } else {
+    tx = e.aimX == null ? ox + e.facing * 8 : e.aimX;
+    ty = e.aimY == null ? oy + 4 : e.aimY;
+    const mine = HOOPS.find(h => h.team === e.team);
+    if (mine && Math.hypot(tx - mine.x, ty - mine.y) < 1.8) { tx = mine.x; ty = mine.y; }
   }
-  let dx = (e.aimX == null ? ox + e.facing * 8 : e.aimX) - ox;
-  let dy = (e.aimY == null ? oy + 4 : e.aimY) - oy;
-  const len = Math.hypot(dx, dy) || 1;
-  b.x = ox + dx / len * 0.9;
-  b.vx = dx / len * 18;
-  b.vy = dy / len * 18;
+  const lob = lobTo(ox, oy, tx, ty);
+  b.vx = lob.vx;
+  b.vy = lob.vy;
 }
 function onHill(f) {
   if (!f || f.dead || !f.onGround) return false;
@@ -2157,7 +2217,8 @@ function beginGoal(team, hoop, who) {
   if (who) who.dunking = true;
   const x = hoop ? hoop.x : BW / 2;
   const y = hoop ? hoop.y : 5.5;
-  game.goal = {t:2, team, x, y, win: game.score[team] >= game.need};
+  const name = who && who.name ? String(who.name).slice(0, 12) : '';
+  game.goal = {t:2, team, x, y, name, win: game.score[team] >= game.need};
   if (game.ball) {
     game.ball.holder = null;
     game.ball.x = x;
@@ -2201,6 +2262,7 @@ function kickoff() {
     game.ball.vy = 0;
     game.ball.side = null;
     game.ball.shot = 0;
+    game.ball.by = null;
     game.ball.lock = 0.6;
   }
 }
@@ -2221,13 +2283,32 @@ function updateBall(dt) {
       return;
     }
   } else b.holder = null;
-  const prevY = b.y;
+  const prevX = b.x, prevY = b.y;
   b.vy -= 20 * dt;
   if (b.vy < -16) b.vy = -16;
   b.x += b.vx * dt;
   b.y += b.vy * dt;
-  if (b.y < 1.25) { b.y = 1.25; b.vy = Math.abs(b.vy) * 0.55; b.vx *= 0.86; }
-  if (b.vy < 0) {
+  if (b.lock <= 0 && b.shot && b.vy < 0 && prevY > b.y) {
+    for (const hoop of HOOPS) {
+      if (!(prevY > hoop.y && b.y <= hoop.y)) continue;
+      const span = prevY - b.y;
+      const u = span > 0.0001 ? (prevY - hoop.y) / span : 1;
+      const xAt = prevX + (b.x - prevX) * clamp(u, 0, 1);
+      if (Math.abs(xAt - hoop.x) >= 1.05) continue;
+      if (b.side !== hoop.team) {
+        b.x = xAt;
+        b.y = hoop.y + 0.2;
+        b.vy = Math.max(5, Math.abs(b.vy) * 0.55);
+        b.vx *= 0.45;
+        return;
+      }
+      b.x = xAt;
+      beginGoal(hoop.team, hoop, b.by);
+      return;
+    }
+  }
+  if (b.y < 1.25) { b.y = 1.25; b.vy = Math.abs(b.vy) * 0.55; b.vx *= 0.86; b.shot = 0; }
+  if (!b.shot && b.vy < 0) {
     for (const p of PLATS) {
       if (b.x > p.x && b.x < p.x + p.w && prevY >= p.y + 0.2 && b.y <= p.y + 0.2) {
         b.y = p.y + 0.35;
@@ -2244,25 +2325,14 @@ function updateBall(dt) {
       else { b.x = s.x + s.w + 0.2; b.vx = Math.abs(b.vx) * 0.6; }
     }
   }
-  if (b.lock <= 0) {
-    for (const hoop of HOOPS) {
-      if (b.shot && prevY > hoop.y && b.y <= hoop.y && Math.abs(b.x - hoop.x) < 0.85 && b.vy < 0) {
-        if (b.side !== hoop.team) {
-          b.y = hoop.y + 0.2;
-          b.vy = Math.max(5, Math.abs(b.vy) * 0.55);
-          b.vx *= 0.45;
-          return;
-        }
-        beginGoal(hoop.team, hoop);
-        return;
-      }
-    }
+  if (b.lock <= 0 && !game.goal) {
     for (const f of fighters) {
       if (f.dead) continue;
       if (Math.hypot(CXx(f) - b.x, (f.y + f.h * 0.55) - b.y) < 1) {
         b.holder = f;
         b.side = f.team;
         b.shot = 0;
+        b.by = null;
         break;
       }
     }
@@ -3029,19 +3099,21 @@ function drawHUD(cam) {
   const allies = fighters.filter(f => me && f.team === me.team);
   const foes = fighters.filter(f => !me || f.team !== me.team);
   allies.sort((a, b) => (a === me ? -1 : 0) - (b === me ? -1 : 0));
-  const paintSide = (list, side) => {
+  const feedH = drawKillFeed();
+  const paintSide = (list, side, base) => {
+    base = base || 0;
     if (list.length && fighters.length > 1) {
       const ally = me && list[0].team === me.team;
-      text(ally ? '아군' : '상대', side === 'left' ? 36 : W - 36, 0, 12, ally ? '#8d8a82' : '#e23b3b', side === 'left' ? 'left' : 'right');
+      text(ally ? '아군' : '상대', side === 'left' ? 36 : W - 36, base, 12, ally ? '#8d8a82' : '#e23b3b', side === 'left' ? 'left' : 'right');
     }
-    let dy = 0;
+    let dy = base;
     list.forEach(e => {
       const keys = plateKeys(e);
       playerPlate(e, side, keys, dy);
       dy += keys ? ((e.gadLv || 0) >= 5 ? 146 : 118) : 72;
     });
   };
-  if (allies.length) paintSide(allies, 'left');
+  if (allies.length) paintSide(allies, 'left', feedH);
   if (game && (game.mode === 'duel' || game.mode === 'gem' || game.mode === 'ball' || game.mode === 'hill')) {
     paintSide(foes, 'right');
     if (game.mode === 'duel' && fighters.length > 2) text(fighters.length >= 6 ? '3대3' : '2대2', W / 2, 16, 15, '#eceae4', 'center');
@@ -3359,7 +3431,8 @@ function drawObjectives(cam) {
       const top = w2s(hoop.x + hoop.side * 0.15, hoop.y + 2.3, cam);
       ctx.fillStyle = '#d0d4dc';
       ctx.fillRect(top.x - 3, top.y, 6, rim.y - top.y);
-      ctx.strokeStyle = '#e23b3b';
+      const mine = myFighter();
+      ctx.strokeStyle = mine && hoop.team === mine.team ? '#e23b3b' : '#8d8a82';
       ctx.lineWidth = 3;
       ctx.beginPath();
       ctx.moveTo(rim.x - RIM_W, rim.y);
@@ -3465,9 +3538,12 @@ function renderBattle() {
   drawObjectives(cam);
   drawHUD(cam);
   if (game && game.goal) {
-    text('골', W / 2, H * 0.18, 64, '#eceae4', 'center');
+    const gy = Math.max(148, H * 0.22);
+    const who = game.goal.name || '';
+    if (who) text(who, W / 2, gy - 40, 28, '#eceae4', 'center');
+    text('골', W / 2, gy, 72, '#eceae4', 'center');
     ctx.fillStyle = '#e23b3b';
-    ctx.fillRect(W / 2 - 18, H * 0.18 + 72, 36, 3);
+    ctx.fillRect(W / 2 - 22, gy + 80, 44, 3);
   }
   if (S.pause || (game && game.over)) {
     ctx.fillStyle = 'rgba(8,9,12,.62)';
@@ -3695,7 +3771,9 @@ function frameMenu() {
     if (acct.user) {
       text(acct.user.name, x, y0, 15, '#eceae4');
       text('코인  ' + acct.coin + '     PP  ' + acct.pp, x, y0 + 24, 14, '#8d8a82');
-      menuY = y0 + 56;
+      button(x, y0 + 48, 168, 36, '10 코인 → 5 PP', () => trade(true), {off:acct.coin < 10, fs:14});
+      button(x + 176, y0 + 48, 168, 36, '10 PP → 5 코인', () => trade(false), {off:acct.pp < 10, fs:14});
+      menuY = y0 + 100;
     }
     button(x, menuY, 240, 42, 'AI 대전', () => { S.screen = 'aimode'; });
     button(x, menuY + 46, 240, 42, '사람 대전', () => { S.screen = 'pvp'; pingFB(); });
@@ -3738,7 +3816,8 @@ function frameMenu() {
       ['가젯', 'Q. 5레벨. 한 판에 3번. 쓰면 10초'],
       ['차지', 'E. 9레벨. 이름 앞 숫자만큼 맞추면 사용. 쓰면 체력 5'],
       ['하이퍼', 'Shift. 12레벨. 차지를 3번 쓰면 사용'],
-      ['계정', '승리하면 코인 4~7, PP 4~7. 30%는 둘 다. 영웅 창에서 상승']
+      ['계정', '승리하면 코인 4~7, PP 4~7. 30%는 둘 다. 영웅 창에서 상승'],
+      ['교환', '10 코인으로 5 PP. 10 PP로 5 코인']
     ];
     const colW = Math.min(460, (W - x * 2 - 40) / 2);
     rows.forEach((ln, i) => {
@@ -4403,11 +4482,12 @@ function publishState() {
       x:+b.x.toFixed(2), y:+b.y.toFixed(2), vx:+(b.vx || 0).toFixed(2), vy:+(b.vy || 0).toFixed(2),
       side:b.side == null ? -1 : b.side, holder:(b.holder && b.holder.id) || 0
     } : 0;
-    obj.goal = game.goal ? {t:+game.goal.t.toFixed(2), team:game.goal.team, x:game.goal.x, y:game.goal.y, win:!!game.goal.win} : 0;
+    obj.goal = game.goal ? {t:+game.goal.t.toFixed(2), team:game.goal.team, x:game.goal.x, y:game.goal.y, name:game.goal.name || '', win:!!game.goal.win} : 0;
   } else if (game.mode === 'hill') {
     obj.hold = (game.hold || [0, 0]).map(v => +(+v).toFixed(2));
     obj.hillN = game.hillN || [0, 0];
   }
+  obj.kills = killFeed().map(k => ({a:k.a || '', b:k.b || '', at:k.at || 0}));
   const snap = {
     t:Date.now(),
     fighters:fighters.map(serF), mobs:mobs.filter(m => !m.dead).map(serF), bosses:bosses.map(serF),
@@ -4593,6 +4673,7 @@ function applySnap(s) {
     if (o.hillN) game.hillN = o.hillN;
     if (o.goal && typeof o.goal === 'object') game.goal = o.goal;
     else game.goal = null;
+    if (o.kills) game.kills = o.kills;
     if (o.ball && typeof o.ball === 'object') {
       const b = o.ball;
       game.ball = {
