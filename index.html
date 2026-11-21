@@ -1522,10 +1522,11 @@ function aiCastRoll(e, inp) {
   };
   roll('hAt', aiReadyHyper(e), row ? row.h : 0);
   roll('cAt', aiReadyCharge(e), row ? row.c : 0);
-  roll('gAt', canGad(e), row ? row.g : 0);
+  const tipGad = e.char === 'graviter' && game && game.mode === 'ball' && game.tipT > 0;
+  roll('gAt', canGad(e) && !tipGad, row ? row.g : 0);
   if (e.mem.hAtY && aiReadyHyper(e)) { inp.hyper = true; e.mem.hAtY = 0; return; }
   if (e.mem.cAtY && aiReadyCharge(e)) { inp.chg = true; e.mem.cAtY = 0; return; }
-  if (e.mem.gAtY && canGad(e)) { inp.gad = true; e.mem.gAtY = 0; }
+  if (e.mem.gAtY && canGad(e) && !tipGad) { inp.gad = true; e.mem.gAtY = 0; }
 }
 function aiInp(e) {
   const inp = {left:false, right:false, jump:false, lmb:false, rmb:false, aimX:e.x + e.facing * 3, aimY:e.y + 1};
@@ -1772,10 +1773,12 @@ function updateProj(p, dt) {
     if (p.y < 1) { p.y = 1; p.vy *= -0.3; p.vx *= 0.7; }
     p.fuse -= dt;
     const cx = BW / 2, cy = 1.2;
-    for (const o of bodies()) {
-      if (o.dead || o.team === p.team || o.kind === 'sum') continue;
-      o.x += clamp(cx - CXx(o), -14, 14) * dt;
-      o.y += clamp(cy - o.y, -8, 8) * dt;
+    if (!(game && game.tipT > 0)) {
+      for (const o of bodies()) {
+        if (o.dead || o.team === p.team || o.kind === 'sum') continue;
+        o.x += clamp(cx - CXx(o), -14, 14) * dt;
+        o.y += clamp(cy - o.y, -8, 8) * dt;
+      }
     }
     if (net.role !== 'guest') {
       if (p.fuse <= 0) {
@@ -1997,6 +2000,7 @@ function initObjective(kind) {
     game.score = [0, 0];
     game.need = 5;
     game.loose = null;
+    game.tipT = 3;
   }
 }
 function objKind(mode) {
@@ -2265,6 +2269,7 @@ function kickoff() {
     game.ball.by = null;
     game.ball.lock = 0.6;
   }
+  game.tipT = 3;
 }
 function updateBall(dt) {
   const b = game.ball;
@@ -2449,8 +2454,12 @@ function adoptGuestPos(e) {
   if (typeof r.vy === 'number') e.vy = r.vy;
   if (r.g != null) e.onGround = !!r.g;
 }
+function tickTip(dt) {
+  if (game && game.tipT > 0) game.tipT = Math.max(0, game.tipT - dt);
+}
 function simulate(dt) {
   if (!game) return;
+  tickTip(dt);
   if (game.goal) tickGoal(dt);
   if (game.over || game.goal) return;
   const cam = camera();
@@ -4729,6 +4738,7 @@ async function pollOnline() {
 }
 
 function predict(dt) {
+  tickTip(dt);
   const me = fighters.find(f => f.owner === myId);
   if (me && !me.dead && !(game && (game.over || game.goal))) {
     const inp = humanInp(me, 'p1', camera());
