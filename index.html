@@ -200,7 +200,7 @@ const COOL = {
 const CHARGE_NEED = {charger:5, chainer:10, shifter:15, graviter:7, connector:8, exploder:5, explorer:3, spinner:7, timer:2};
 const CHARGE = {
   graviter:'필드의 모든 적 속도를 39% 낮추고,\n자신의 속도만 100% 올린다. 5초',
-  connector:'8칸 안의 가까운 적 3명에게 분신을 소환한다.\n분신은 공격하지 않고 체력은 15',
+  connector:'8칸 안의 가까운 적 3명에게 분신을 소환한다.\n분신은 1초마다 단발 2피해, 체력은 15',
   exploder:'10칸 안의 모든 적에게 일반 공격의 4배 피해를 준다',
   explorer:'7초 동안, 좌클릭을 누르고 있는 동안\n속도가 100% 증가한다',
   spinner:'포인터 방향으로 8칸을 5초 동안 전진한다.\n그동안 8×8 스핀으로 0.5초마다 4피해',
@@ -1071,6 +1071,19 @@ function tickSums(dt) {
     s.flash = Math.max(0, (s.flash || 0) - step);
     const owner = fighters.find(f => (s.who && f.owner === s.who) || f.id === s.owner);
     if (!owner || owner.dead) { s.dead = true; continue; }
+    if (s.char === 'connector' && s.fixed && net.role !== 'guest') {
+      if (s.shot == null) s.shot = 0.86 - ((s.slot || 0) % 3) * 0.18;
+      s.shot += step;
+      if (s.shot >= 1) {
+        s.shot -= 1;
+        const x = CXx(s), y = CYy(s);
+        const t = nearestTo(x, y, s.team);
+        let dx = s.facing || owner.facing || 1, dy = 0;
+        if (t) { dx = CXx(t) - x; dy = CYy(t) - y; }
+        const len = Math.hypot(dx, dy) || 1;
+        spawnProj({type:'star', x, y, vx:dx / len * 16, vy:dy / len * 16, r:0.15, dmg:2, life:0.75, team:s.team, owner:owner.id, who:'sum', grav:0, meter:0});
+      }
+    }
     if (s.fixed) continue;
     const per = s.per || 3;
     if (s.ang == null) s.ang = (s.slot || 0) * Math.PI * 2 / per;
@@ -1186,13 +1199,13 @@ function castCharge(e, hyper) {
   if (e.char === 'connector') {
     if (net.role === 'guest') return;
     const foes = liveFoes(e).filter(o => distC(e, o) <= 8).sort((a, b) => distC(e, a) - distC(e, b)).slice(0, 3);
-    for (const o of foes) {
+    foes.forEach((o, i) => {
       sums.push({
-        id:++NID, kind:'sum', fixed:1, char:'connector', noIframe:1, who:e.owner || '', owner:e.id, team:e.team, slot:0,
+        id:++NID, kind:'sum', fixed:1, char:'connector', noIframe:1, who:e.owner || '', owner:e.id, team:e.team, slot:i,
         x:o.x, y:Math.max(1, o.y), w:0.72, h:1.2, hp:15, maxHp:15, dead:false, vx:0, vy:0, flash:0, iframe:0
       });
       fx.push({kind:'line', x:CXx(e), y:CYy(e), x2:o.x, y2:Math.max(1, o.y) + 0.7, life:0.4, max:0.4, color:'#cbb892'});
-    }
+    });
     return;
   }
   if (e.char === 'exploder') {
