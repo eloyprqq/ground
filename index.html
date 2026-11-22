@@ -197,9 +197,10 @@ const COOL = {
   graviter:[0.5, 1], connector:[0.3, 3], exploder:[0.25, 4], explorer:[3, 0.5], spinner:[0.8, 0.3],
   timer:[5, 3]
 };
-const CHARGE_NEED = {charger:5, chainer:10, shifter:15, graviter:7, connector:8, exploder:5, explorer:3, spinner:7, timer:2};
+const CHARGE_NEED = {charger:5, chainer:10, shifter:15, howler:8, graviter:7, connector:8, exploder:5, explorer:3, spinner:7, timer:2};
 const CHARGE = {
   charger:'포인터 방향으로 10칸 돌진한다.\n3칸 안의 적을 끌고 가 던진다',
+  howler:'주변 8칸에 풀차지 비명을 쓴다.\n8피해, 3초 멈춤',
   chainer:'4×4 갈고리를 포인터 방향으로 10칸 던진다.\n맞으면 12피해, 3초 멈춤',
   shifter:'분신 15개를 5초 소환한다.\n분신은 0.5초마다 원혼 1피해, 체력 2',
   graviter:'모든 적 속도를 39% 낮추고,\n자신의 속도만 100% 올린다. 5초',
@@ -209,11 +210,17 @@ const CHARGE = {
   spinner:'포인터 방향으로 8칸을 5초 동안 전진한다.\n8×8 범위에서 0.5초마다 4피해',
   timer:'아군의 체력, 위치, 쿨타임을 저장한다.\nE를 다시 누르면 그 값으로 돌아간다'
 };
-const HYPER = {charger:1, chainer:1, shifter:1};
+const HYPER = {charger:1, chainer:1, shifter:1, howler:1, graviter:1, connector:1, exploder:1, explorer:1, spinner:1};
 const HYPER_TEXT = {
   charger:'같은 돌진이다.\n던진 적의 시야가 4초 동안 2칸이 된다',
   chainer:'같은 갈고리다.\n맞은 적을 자신에게 끌어온다',
-  shifter:'분신 30개를 5초 소환한다.\n분신은 0.5초마다 원혼 1피해, 체력 2'
+  shifter:'분신 30개를 5초 소환한다.\n분신은 0.5초마다 원혼 1피해, 체력 2',
+  howler:'주변 11칸에 풀차지 비명과 5피해.\n3초 멈춤, 4초 동안 이속 -50%',
+  graviter:'같은 중력이다.\n7초 멈춤, 자신의 속도는 150% 상승',
+  connector:'같은 분신이다.\n적마다 2마리, 체력 5. 공격이 게이지에 찬다',
+  exploder:'10칸 안의 모든 적에게 14피해.\n3초 멈춤',
+  explorer:'7초 동안 속도가 200%가 된다.\n화살은 7피해, 가젯과 같은 크기',
+  spinner:'같은 전진이다.\n10칸을 가고, 0.5초마다 8피해'
 };
 
 const BW = 46, BH = 14;
@@ -575,7 +582,7 @@ function makeFighter(char, x, team, name) {
     gadLeft:3, gadCd:0, gadLv:0, stopT:0, slowT:0, slowM:1, arrowT:0,
     gadSpin:0, gadSpinTick:0, gadCast:0, chainSpin:0, guardT:0, gadWin:0,
     bombT:0, backT:0, backX:0, backY:0, savedHp:-1, howlT:0, howlId:0, markT:0,
-    charge:0, chargeUsed:0, blindT:0, rushT:0, chgT:0, spinGo:0, teamSnap:null,
+    charge:0, chargeUsed:0, blindT:0, rushT:0, rushM:2, warpT:0, chgT:0, spinGo:0, teamSnap:null,
     _pl:false, _pr:false, _pj:false, mem:{}
   };
 }
@@ -820,8 +827,9 @@ function speedMul(e) {
   if (e.slowA > 0) m *= 0.95;
   if (e.haste > 0) m *= 1.5;
   if (e.slowT > 0) m *= e.slowM || 1;
-  if (e.boosting) m *= (e.rushT > 0 && e.char === 'explorer') ? 2 : 1.5;
-  if (e.rushT > 0 && e.char === 'graviter') m *= 2;
+  if (e.warpT > 0 && e.char === 'explorer') m *= 2;
+  else if (e.boosting) m *= (e.rushT > 0 && e.char === 'explorer') ? 2 : 1.5;
+  if (e.rushT > 0 && e.char === 'graviter') m *= e.rushM || 2;
   return m;
 }
 function spawnProj(p) {
@@ -1089,7 +1097,7 @@ function tickSums(dt) {
         let dx = s.facing || owner.facing || 1, dy = 0;
         if (t) { dx = CXx(t) - x; dy = CYy(t) - y; }
         const len = Math.hypot(dx, dy) || 1;
-        spawnProj({type:'star', x, y, vx:dx / len * 16, vy:dy / len * 16, r:0.15, dmg:2, life:0.75, team:s.team, owner:owner.id, who:'sum', grav:0, meter:0});
+        spawnProj({type:'star', x, y, vx:dx / len * 16, vy:dy / len * 16, r:0.15, dmg:2, life:0.75, team:s.team, owner:owner.id, who:'sum', grav:0, meter:s.fill ? 1 : 0});
       }
     }
     if (s.fixed) continue;
@@ -1159,7 +1167,7 @@ function aimDir(e) {
   if (len < 0.2) { dx = e.facing || 1; dy = 0; len = 1; }
   return {x:dx / len, y:dy / len};
 }
-const CHARGE_WORD = {charger:'돌진', chainer:'갈고리', shifter:'분신', graviter:'중력', connector:'분신', exploder:'폭발', explorer:'가속', spinner:'회전', timer:'기록'};
+const CHARGE_WORD = {charger:'돌진', chainer:'갈고리', shifter:'분신', howler:'비명', graviter:'중력', connector:'분신', exploder:'폭발', explorer:'가속', spinner:'회전', timer:'기록'};
 function chargeBurst(e, hyper) {
   const col = (CHAR[e.char] && CHAR[e.char].color) || '#eceae4';
   fx.push({x:CXx(e), y:CYy(e), r:hyper ? 2.2 : 1.5, life:0.28, max:0.28, color:col, out:1});
@@ -1185,6 +1193,22 @@ function summonShift(e, n) {
   }
   fx.push({x:CXx(e), y:CYy(e), r:n > 15 ? 3.2 : 2.2, life:0.3, max:0.3, color:'#9a86c2', out:1});
 }
+function howlBlast(e, reach, dmg, stop, slow) {
+  let hit = 0;
+  if (net.role !== 'guest') {
+    const hid = 'hw' + e.id + ':' + (++NID);
+    for (const o of liveFoes(e)) {
+      if (distC(e, o) > reach) continue;
+      hit++;
+      hurt(o, dmg, {src:e, hid, kb:10, meter:false});
+      if (stop) { o.stopT = Math.max(o.stopT || 0, stop); o.vx = 0; o.vy = 0; }
+      if (slow) applySlow(o, 0.5, slow);
+    }
+  }
+  if (hit) sfx('stop');
+  fx.push({x:CXx(e), y:e.y + 0.9, r:reach, life:0.28, max:0.28, color:'#ff7ad8'});
+  burst(0.22, 0.07, 1100);
+}
 function castCharge(e, hyper) {
   const dir = aimDir(e);
   if (e.char === 'charger') {
@@ -1199,35 +1223,60 @@ function castCharge(e, hyper) {
     return;
   }
   if (e.char === 'shifter') { summonShift(e, hyper ? 30 : 15); return; }
+  if (e.char === 'howler') { howlBlast(e, hyper ? 11 : 8, hyper ? 13 : 8, 3, hyper ? 4 : 0); return; }
   if (e.char === 'graviter') {
-    for (const o of liveFoes(e)) applySlow(o, 0.61, 5);
-    e.rushT = 5;
+    if (hyper) {
+      if (net.role !== 'guest') {
+        for (const o of liveFoes(e)) { o.stopT = Math.max(o.stopT || 0, 7); o.vx = 0; o.vy = 0; }
+      }
+      e.rushT = 7;
+      e.rushM = 2.5;
+      sfx('stop');
+    } else {
+      for (const o of liveFoes(e)) applySlow(o, 0.61, 5);
+      e.rushT = 5;
+      e.rushM = 2;
+    }
     return;
   }
   if (e.char === 'connector') {
     if (net.role === 'guest') return;
     const foes = liveFoes(e).filter(o => distC(e, o) <= 8).sort((a, b) => distC(e, a) - distC(e, b)).slice(0, 3);
+    const copies = hyper ? 2 : 1;
+    const hp = hyper ? 5 : 15;
     foes.forEach((o, i) => {
-      sums.push({
-        id:++NID, kind:'sum', fixed:1, char:'connector', noIframe:1, who:e.owner || '', owner:e.id, team:e.team, slot:i,
-        x:o.x, y:Math.max(1, o.y), w:0.72, h:1.2, hp:15, maxHp:15, dead:false, vx:0, vy:0, flash:0, iframe:0
-      });
-      fx.push({kind:'line', x:CXx(e), y:CYy(e), x2:o.x, y2:Math.max(1, o.y) + 0.7, life:0.4, max:0.4, color:'#cbb892'});
+      for (let n = 0; n < copies; n++) {
+        sums.push({
+          id:++NID, kind:'sum', fixed:1, char:'connector', noIframe:1, who:e.owner || '', owner:e.id, team:e.team, slot:i * copies + n,
+          x:o.x + (n ? 0.7 : 0), y:Math.max(1, o.y), w:0.72, h:1.2, hp, maxHp:hp, dead:false, vx:0, vy:0, flash:0, iframe:0, fill:hyper ? 1 : 0
+        });
+        fx.push({kind:'line', x:CXx(e), y:CYy(e), x2:o.x, y2:Math.max(1, o.y) + 0.7, life:0.4, max:0.4, color:'#cbb892'});
+      }
     });
     return;
   }
   if (e.char === 'exploder') {
+    const dmg = hyper ? 14 : 8;
     fx.push({x:CXx(e), y:CYy(e), r:10, life:0.32, max:0.32, color:'#c45c52', out:1});
     if (net.role !== 'guest') {
       const hid = 'cx' + e.id + ':' + (++NID);
-      for (const o of liveFoes(e)) if (distC(e, o) <= 10) hurt(o, 8, {src:e, kb:8, meter:false, hid});
+      for (const o of liveFoes(e)) if (distC(e, o) <= 10) {
+        hurt(o, dmg, {src:e, kb:8, meter:false, hid});
+        if (hyper) { o.stopT = Math.max(o.stopT || 0, 3); o.vx = 0; o.vy = 0; }
+      }
     }
+    if (hyper) sfx('stop');
     sfx('slam');
     return;
   }
-  if (e.char === 'explorer') { e.rushT = 7; return; }
+  if (e.char === 'explorer') {
+    if (hyper) e.warpT = 7;
+    else e.rushT = 7;
+    return;
+  }
   if (e.char === 'spinner') {
-    e.spinGo = 5; e.spinLeft = 8; e.spinUx = dir.x; e.spinUy = dir.y; e.pulse = 0; e._spinSeen = {};
+    e.spinGo = 5; e.spinLeft = hyper ? 10 : 8; e.spinRate = hyper ? 2 : 1.6; e.spinDmg = hyper ? 8 : 4;
+    e.spinUx = dir.x; e.spinUy = dir.y; e.pulse = 0; e._spinSeen = {};
     e.facing = dir.x >= 0 ? 1 : -1;
     return;
   }
@@ -1316,7 +1365,7 @@ function chargeMotion(e, dt) {
   }
   if (e.spinGo > 0) {
     e.spinGo -= dt;
-    const step = Math.min(e.spinLeft || 0, 1.6 * dt);
+    const step = Math.min(e.spinLeft || 0, (e.spinRate || 1.6) * dt);
     const ux = e.spinUx == null ? 1 : e.spinUx;
     const uy = e.spinUy || 0;
     e.x = clamp(e.x + ux * step, 0.3, BW - e.w - 0.3);
@@ -1335,7 +1384,7 @@ function chargeMotion(e, dt) {
       if (net.role !== 'guest') {
         for (const id of Object.keys(e._spinSeen)) {
           const o = byId(+id);
-          if (o && !o.dead) hurt(o, 4, {src:e, dot:true, meter:false, kb:2, hid:'cs' + e.id + ':' + e.spinN + ':' + id});
+          if (o && !o.dead) hurt(o, e.spinDmg || 4, {src:e, dot:true, meter:false, kb:2, hid:'cs' + e.id + ':' + e.spinN + ':' + id});
         }
       }
       e._spinSeen = {};
@@ -1487,10 +1536,11 @@ function updateSkill(e, inp, dt) {
       if (e.boostT >= 3) { e.boosting = false; e.boostT = 0; e.cd.l = 3; }
     } else if (e.boosting && !inp.lmb) { e.boosting = false; e.boostT = 0; e.cd.l = 3; }
     if (inp.rPressed && e.cd.r <= 0) {
-      const buff = e.arrowT > 0;
-      const sp = buff ? 19.5 : 13;
-      spawnProj({type:'arrow', x:CXx(e), y:e.y + 0.95, vx:Math.cos(aim) * sp, vy:Math.sin(aim) * sp, r:buff ? 0.46 : 0.14, wide:buff ? 1 : 0, dmg:buff ? 7 : 4, life:1.5, team:e.team, owner:e.id, grav:10});
-      e.cd.r = 0.5 + (buff ? 0.5 : 0); markAttack(e);
+      const gadget = e.arrowT > 0;
+      const big = gadget || e.warpT > 0;
+      const sp = gadget ? 19.5 : 13;
+      spawnProj({type:'arrow', x:CXx(e), y:e.y + 0.95, vx:Math.cos(aim) * sp, vy:Math.sin(aim) * sp, r:big ? 0.46 : 0.14, wide:big ? 1 : 0, dmg:big ? 7 : 4, life:1.5, team:e.team, owner:e.id, grav:10});
+      e.cd.r = 0.5 + (gadget ? 0.5 : 0); markAttack(e);
     }
   } else if (e.char === 'spinner') {
     if (e.cd.l <= 0 && inp.lmb && e.spinT < 4) {
@@ -1692,6 +1742,7 @@ function updateFighter(e, inp, dt) {
   e.markT = Math.max(0, (e.markT || 0) - dt);
   e.blindT = Math.max(0, (e.blindT || 0) - dt);
   e.rushT = Math.max(0, (e.rushT || 0) - dt);
+  e.warpT = Math.max(0, (e.warpT || 0) - dt);
   e.trailT = Math.max(0, (e.trailT || 0) - dt);
   if (!(e.trailT > 0) && !(e.chgT > 0)) e.trail = null;
   tickTimer(e, dt);
@@ -3473,7 +3524,7 @@ function drawChains(cam) {
       ctx.stroke();
       text('회전', p.x, p.y - rad - 8, 12, '#eceae4', 'center');
     }
-    if (e.rushT > 0 && (e.char === 'graviter' || e.char === 'explorer')) {
+    if ((e.rushT > 0 && (e.char === 'graviter' || e.char === 'explorer')) || (e.warpT > 0 && e.char === 'explorer')) {
       const p = w2s(CXx(e), e.y + 0.25, cam);
       const dir = e.facing || 1;
       ctx.strokeStyle = e.char === 'graviter' ? '#7c86c4' : '#6aaa84';
@@ -4579,7 +4630,7 @@ function serF(e) {
     dmgCutT:e.dmgCutT > 0 ? +e.dmgCutT.toFixed(2) : 0, lock:e.netLock || 0,
     stopT:+(e.stopT || 0).toFixed(2), slowT:+(e.slowT || 0).toFixed(2), slowM:e.slowM || 1,
     guardT:+(e.guardT || 0).toFixed(2), gadWin:+(e.gadWin || 0).toFixed(2),
-    charge:e.charge || 0, chargeUsed:e.chargeUsed || 0, blindT:+(e.blindT || 0).toFixed(2), rushT:+(e.rushT || 0).toFixed(2),
+    charge:e.charge || 0, chargeUsed:e.chargeUsed || 0, blindT:+(e.blindT || 0).toFixed(2), rushT:+(e.rushT || 0).toFixed(2), rushM:e.rushM || 2, warpT:+(e.warpT || 0).toFixed(2),
     iframe:+(e.iframe || 0).toFixed(2), markT:+(e.markT || 0).toFixed(2),
     bombT:+(e.bombT || 0).toFixed(2), backT:+(e.backT || 0).toFixed(2),
     backX:+(e.backX || 0).toFixed(2), backY:+(e.backY || 0).toFixed(2),
@@ -4757,6 +4808,8 @@ function applySnap(s) {
       local.chargeUsed = snapMe.chargeUsed || 0;
       local.blindT = Math.max(local.blindT || 0, snapMe.blindT || 0);
       local.rushT = Math.max(local.rushT || 0, snapMe.rushT || 0);
+      local.rushM = snapMe.rushM || local.rushM || 2;
+      local.warpT = Math.max(local.warpT || 0, snapMe.warpT || 0);
       if (place) {
         local.x = snapMe.x; local.y = snapMe.y;
         local.vx = snapMe.vx || 0; local.vy = snapMe.vy || 0;
