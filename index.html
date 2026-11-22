@@ -187,7 +187,7 @@ const GAD = {
   graviter:'모든 적을 가운데로, 4초 뒤 폭발',
   connector:'팔방으로 표창',
   exploder:'2초 뜬 뒤 찍기, 4피해, 2초 멈춤',
-  explorer:'3초간 화살 7, 이속 +50%, 체력 5',
+  explorer:'5초간 화살 7, 이속 +50%, 체력 5.\n그동안 화살 쿨타임 +0.5초',
   spinner:'3초간 범위 5 회전',
   timer:'체력 저장, 다시 누르면 그 체력으로'
 };
@@ -945,8 +945,8 @@ function castGadget(e) {
     return true;
   }
   if (e.char === 'explorer') {
-    e.arrowT = 3;
-    e.haste = Math.max(e.haste || 0, 3);
+    e.arrowT = 5;
+    e.haste = Math.max(e.haste || 0, 5);
     e.hp = Math.min(e.maxHp, e.hp + 5);
     fx.push({x:CXx(e), y:e.y + e.h, r:0.7, life:0.25, max:0.25, color:'#fff'});
     return true;
@@ -1490,7 +1490,7 @@ function updateSkill(e, inp, dt) {
       const buff = e.arrowT > 0;
       const sp = buff ? 19.5 : 13;
       spawnProj({type:'arrow', x:CXx(e), y:e.y + 0.95, vx:Math.cos(aim) * sp, vy:Math.sin(aim) * sp, r:buff ? 0.46 : 0.14, wide:buff ? 1 : 0, dmg:buff ? 7 : 4, life:1.5, team:e.team, owner:e.id, grav:10});
-      e.cd.r = 0.5; markAttack(e);
+      e.cd.r = 0.5 + (buff ? 0.5 : 0); markAttack(e);
     }
   } else if (e.char === 'spinner') {
     if (e.cd.l <= 0 && inp.lmb && e.spinT < 4) {
@@ -3980,14 +3980,16 @@ function frameMenu() {
       }
       if (shown.tip) text(shown.tip, rx, shown.r ? 248 : 220, 14, '#8d8a82');
       const gadY = shown.tip ? 276 : shown.r ? 248 : 220;
+      const figLeft = rx + Math.min(420, W - rx - 80);
+      const room = Math.max(160, figLeft - rx - 100);
       text('가젯', rx, gadY, 14, '#8d8a82');
-      text(lv >= 5 ? (GAD[shown.id] || '') : '5레벨에 개방', rx + 72, gadY, 15, lv >= 5 ? '#eceae4' : '#8d8a82');
-      const chgY = gadY + 28;
+      const gadBody = lv >= 5 ? (GAD[shown.id] || '') : '5레벨에 개방';
+      const gadLines = wrapLines(gadBody, 15, room);
+      gadLines.forEach((ln, i) => text(ln, rx + 72, gadY + i * 20, 15, lv >= 5 ? '#eceae4' : '#8d8a82'));
+      const chgY = gadY + Math.max(28, gadLines.length * 20 + 8);
       const need = CHARGE_NEED[shown.id];
       text('차지', rx, chgY, 14, '#8d8a82');
       text(!need ? '없음' : lv >= 9 ? ('E  ' + need + '대') : '9레벨에 개방', rx + 72, chgY, 15, lv >= 9 && need ? '#eceae4' : '#8d8a82');
-      const figLeft = rx + Math.min(420, W - rx - 80);
-      const room = Math.max(160, figLeft - rx - 100);
       let after = chgY + 28;
       if (CHARGE[shown.id]) {
         const lines = wrapLines(CHARGE[shown.id], 14, room);
