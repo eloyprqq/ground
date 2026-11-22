@@ -199,14 +199,22 @@ const COOL = {
 };
 const CHARGE_NEED = {charger:5, chainer:10, shifter:15, graviter:7, connector:8, exploder:5, explorer:3, spinner:7, timer:2};
 const CHARGE = {
-  graviter:'필드의 모든 적 속도를 39% 낮추고,\n자신의 속도만 100% 올린다. 5초',
-  connector:'8칸 안의 가까운 적 3명에게 분신을 소환한다.\n분신은 1초마다 단발 2피해, 체력은 15',
-  exploder:'10칸 안의 모든 적에게 일반 공격의 4배 피해를 준다',
+  charger:'포인터 방향으로 10칸 돌진한다.\n3칸 안의 적을 끌고 가 던진다',
+  chainer:'4×4 갈고리를 포인터 방향으로 10칸 던진다.\n맞으면 12피해, 3초 멈춤',
+  shifter:'분신 15개를 5초 소환한다.\n분신은 0.5초마다 원혼 1피해, 체력 2',
+  graviter:'모든 적 속도를 39% 낮추고,\n자신의 속도만 100% 올린다. 5초',
+  connector:'8칸 안의 가까운 적 3명에게 분신을 소환한다.\n분신은 1초마다 단발 2피해, 체력 15',
+  exploder:'10칸 안의 모든 적에게 8피해를 준다.\n일반 공격의 4배다',
   explorer:'7초 동안, 좌클릭을 누르고 있는 동안\n속도가 100% 증가한다',
-  spinner:'포인터 방향으로 8칸을 5초 동안 전진한다.\n그동안 8×8 스핀으로 0.5초마다 4피해',
+  spinner:'포인터 방향으로 8칸을 5초 동안 전진한다.\n8×8 범위에서 0.5초마다 4피해',
   timer:'아군의 체력, 위치, 쿨타임을 저장한다.\nE를 다시 누르면 그 값으로 돌아간다'
 };
 const HYPER = {charger:1, chainer:1, shifter:1};
+const HYPER_TEXT = {
+  charger:'같은 돌진이다.\n던진 적의 시야가 4초 동안 2칸이 된다',
+  chainer:'같은 갈고리다.\n맞은 적을 자신에게 끌어온다',
+  shifter:'분신 30개를 5초 소환한다.\n분신은 0.5초마다 원혼 1피해, 체력 2'
+};
 
 const BW = 46, BH = 14;
 const SOLIDS = [
@@ -3978,10 +3986,10 @@ function frameMenu() {
       const need = CHARGE_NEED[shown.id];
       text('차지', rx, chgY, 14, '#8d8a82');
       text(!need ? '없음' : lv >= 9 ? ('E  ' + need + '대') : '9레벨에 개방', rx + 72, chgY, 15, lv >= 9 && need ? '#eceae4' : '#8d8a82');
+      const figLeft = rx + Math.min(420, W - rx - 80);
+      const room = Math.max(160, figLeft - rx - 100);
       let after = chgY + 28;
       if (CHARGE[shown.id]) {
-        const figLeft = rx + Math.min(420, W - rx - 80);
-        const room = Math.max(160, figLeft - rx - 100);
         const lines = wrapLines(CHARGE[shown.id], 14, room);
         lines.forEach((ln, i) => text(ln, rx + 72, chgY + 26 + i * 20, 14, '#eceae4'));
         after = chgY + 26 + lines.length * 20 + 8;
@@ -3990,7 +3998,9 @@ function frameMenu() {
       if (HYPER[shown.id]) {
         text('하이퍼', rx, after, 14, '#8d8a82');
         text(lv >= 12 ? 'Shift  차지 3번' : '12레벨에 개방', rx + 72, after, 15, lv >= 12 ? '#eceae4' : '#8d8a82');
-        upY = after + 36;
+        const hLines = wrapLines(HYPER_TEXT[shown.id] || '', 14, room);
+        hLines.forEach((ln, i) => text(ln, rx + 72, after + 24 + i * 20, 14, '#eceae4'));
+        upY = after + 24 + hLines.length * 20 + 12;
       }
       button(rx, upY, 220, 36, !acct.user ? '로그인' : maxed ? '최대' : ('코인 ' + cost + '   PP ' + cost), () => raiseChar(shown.id), {off:!acct.user || maxed || acct.coin < cost || acct.pp < cost});
       if (acct.msg) text(acct.msg, rx, upY + 44, 13, '#e23b3b');
