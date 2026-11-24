@@ -1106,6 +1106,7 @@ function tickGadget(e, dt) {
   if (e.gadCast > 0) {
     e.gadCast -= dt;
     if (e.gadCast <= 0) {
+      e.gadCast = 0;
       let t = null, bd = 6;
       for (const o of liveFoes(e)) { const d = distC(e, o); if (d <= bd) { bd = d; t = o; } }
       if (t) { e.x = t.x; e.y = Math.max(1, t.y); t.stopT = Math.max(t.stopT || 0, 2); t.vx = 0; t.vy = 0; }
@@ -1840,7 +1841,7 @@ function updateFighter(e, inp, dt) {
     const target = inp.left && !inp.right ? -spd : inp.right && !inp.left ? spd : 0;
     e.vx += (target - e.vx) * Math.min(1, dt * 14);
   }
-  if (!kicked && inp.jumpEdge && !e.dashT && !e.gadCast && (e.onGround || e.jumps < 2)) {
+  if (!kicked && inp.jumpEdge && !e.dashT && !(e.gadCast > 0) && (e.onGround || e.jumps < 2)) {
     const orb = onOrb(e);
     e.vy = orb ? 16.4 : 11.5;
     if (!e.ai) sfx('jump');
