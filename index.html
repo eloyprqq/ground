@@ -293,7 +293,7 @@ const S = {screen:'title', back:'title', code:'', me:'charger', foe:'spinner', c
 const fb = {state:'unknown', msg:''};
 const acct = {user:null, coin:0, pp:0, rise:{}, msg:'', busy:false, ready:false};
 let acctGen = 0, acctSave = Promise.resolve();
-const net = {role:null, code:'', room:null, busy:false, acc:0, inAcc:0, myTeam:0, viewFresh:false, outSeq:0, remotes:{}, remoteAt:{}, taps:{}};
+const net = {role:null, code:'', room:null, busy:false, acc:0, inAcc:0, myTeam:0, viewFresh:false, outSeq:0, remotes:{}, remoteAt:{}, taps:{}, holdLobby:false, seatBusy:false};
 
 nameEl.value = localStorage.getItem('ground-name') || '플레이어';
 function myName() {
@@ -500,6 +500,10 @@ addEventListener('paste', e => {
 addEventListener('keyup', e => { keys[e.code] = false; });
 addEventListener('pagehide', () => {
   fetch(DB + '/queue/' + myId + '.json', {method:'DELETE', keepalive:true}).catch(() => {});
+  if (net.role === 'guest' && net.code) {
+    fetch(DB + '/rooms/' + net.code + '/players/' + myId + '.json', {method:'DELETE', keepalive:true}).catch(() => {});
+    fetch(DB + '/rooms/' + net.code + '/in/' + myId + '.json', {method:'DELETE', keepalive:true}).catch(() => {});
+  }
 });
 
 function button(x, y, w, h, label, fn, opt = {}) {
@@ -2300,13 +2304,17 @@ function teamSpawnX(team, index, count) {
 function startTeam(players) {
   resetWorld();
   const list = (players || []).filter(p => p && p.id);
-  const half = Math.ceil(list.length / 2);
+  const placed = list.map((p, i) => ({p, slot: Number.isInteger(p.slot) ? p.slot : i}));
+  placed.sort((a, b) => a.slot - b.slot);
+  const span = Math.max(placed.length, placed.reduce((m, r) => Math.max(m, r.slot + 1), 0));
+  const half = Math.ceil(span / 2);
   const online = !!net.role;
-  fighters = list.map((p, i) => {
-    const team = i < half ? 0 : 1;
-    const f = makeFighter(p.char || 'charger', teamSpawnX(team, team === 0 ? i : i - half, half), team, p.name || '플레이어');
+  fighters = placed.map(({p, slot}, i) => {
+    const team = slot < half ? 0 : 1;
+    const side = team === 0 ? slot : slot - half;
+    const f = makeFighter(p.char || 'charger', teamSpawnX(team, side, half), team, p.name || '플레이어');
     f.owner = p.id;
-    f.slot = team === 0 ? i : i - half;
+    f.slot = side;
     f.gems = 0;
     f.ai = p.ai ? true : (online ? false : i !== 0);
     f.gadLv = p.id === myId ? (acct.rise[f.char] || 0) : (p.lv || 0);
@@ -4344,6 +4352,9 @@ function renderBattle() {
           } else startDuel(s.c1, s.c2, s.opt);
         });
         y += 44;
+      } else if (net.role && (game.mode === 'duel' || game.mode === 'gem' || game.mode === 'ball' || game.mode === 'hill')) {
+        button(x, y, 220, 40, '다시', () => backToLobby());
+        y += 44;
       }
       button(x, y, 220, 40, '메뉴로', () => leaveMatch());
     }
@@ -4363,7 +4374,7 @@ function leaveMatch() {
   fetch(DB + '/queue/' + myId + '.json', {method:'DELETE'}).catch(() => {});
   closeStream();
   net.role = null; net.code = ''; net.room = null; net.remote = null; net.remotes = {}; net.remoteAt = {}; net.taps = {};
-  net.playing = false; net.tapReady = false; net.gotAt = 0;
+  net.playing = false; net.holdLobby = false; net.tapReady = false; net.gotAt = 0;
   game = null; S.pause = false; S.screen = 'title';
 }
 function retryRaid() {
@@ -4374,8 +4385,8 @@ function retryRaid() {
 function showName(on) {
   nameEl.style.display = on ? 'block' : 'none';
   if (!on) return;
-  nameEl.style.left = (mx() + 160) + 'px';
-  nameEl.style.top = '86px';
+  nameEl.style.left = (mx() + (S.screen === 'lobby' ? 300 : 160)) + 'px';
+  nameEl.style.top = (S.screen === 'lobby' ? 52 : 86) + 'px';
   nameEl.style.transform = 'none';
 }
 function mx() { return Math.max(56, Math.round(W * 0.08)); }
@@ -4683,7 +4694,8 @@ function frameMenu() {
     const online = fb.state === 'ok';
     button(x, 164, 260, 40, '무작위 매칭', () => openPick('매칭 캐릭터', c => { S.me = c; S.screen = 'qmode'; }), {off:!online});
     button(x, 208, 260, 40, '방 만들기', () => makeRoom(), {off:!online});
-    button(x, 252, 260, 40, '코드로 들어가기', () => { S.code = ''; nameEl.blur(); S.screen = 'join'; }, {off:!online});
+    button(x, 252, 260, 40, '코드로 들어가기', () => { S.code = ''; S.joinErr = ''; S.roomErr = ''; nameEl.blur(); S.screen = 'join'; }, {off:!online});
+    if (S.roomErr) text(S.roomErr, x, 360, 14, '#e23b3b');
     button(x, 308, 260, 40, '같은 화면', () => openPick('1P', c => { S.me = c; openPick('2P', f => startDuel(c, f, {ai:false, local2p:true, name1:myName(), name2:'2P'})); }));
     if (fb.state === 'denied') {
       text('Realtime Database 규칙에 아래를 넣고 저장하면 매칭이 열립니다.', x, 420, 13, '#8d8a82');
@@ -4723,50 +4735,54 @@ function frameMenu() {
     showName(true);
     const room = net.room || {};
     const size = roomNeed(room);
-    const roster = orderedPlayers(room);
-    text(net.code || '', x, 56, 26, '#eceae4');
-    text(size > 2 ? '이 코드를 팀원에게 알려 주세요' : '이 코드를 상대에게 알려 주세요', x, 88, 13, '#8d8a82');
-    let y = 112;
+    const seats = seatArray(room);
+    const mine = seats.find(p => p && p.id === myId) || null;
+    text('방', x, 48, 13, '#8d8a82');
+    text((net.code || '').split('').join('  '), x, 68, 36, '#eceae4');
+    ctx.fillStyle = '#e23b3b';
+    ctx.fillRect(x, 112, 36, 2);
+    button(x + 210, 74, 72, 32, '복사', () => copyCode(), {fs:14, align:'center', pad:0});
+    text('친구에게 이 코드를 보내세요. 자리를 누르면 서로 바뀝니다.', x, 126, 13, '#8d8a82');
+    let y = 158;
     if (net.role === 'host') {
       button(x, y, 100, 34, '1대1', () => setRoomSize(2), {on:room.mode === 'duel' && size === 2});
       button(x + 108, y, 100, 34, '2대2', () => setRoomSize(4), {on:room.mode === 'duel' && size === 4});
       button(x + 216, y, 100, 34, '3대3', () => setRoomSize(6), {on:room.mode === 'duel' && size === 6});
-      y += 44;
+      y += 46;
     }
-    text('왼쪽', x, y, 12, '#8d8a82');
-    text('오른쪽', x + 240, y, 12, '#8d8a82');
-    y += 18;
     const half = size / 2;
+    text('왼쪽', x, y, 12, '#8d8a82');
+    text('오른쪽', x + 268, y, 12, '#8d8a82');
+    y += 20;
     for (let i = 0; i < size; i++) {
       const team = i < half ? 0 : 1;
       const row = team === 0 ? i : i - half;
-      const p = roster[i];
-      const label = p ? ((p.name || '플레이어') + '  ' + charOf(p.char || 'charger').name) : '빈 자리';
-      text(label, x + team * 240, y + row * 22, 14, p ? '#eceae4' : '#6e6b64');
+      const p = seats[i];
+      const who = p ? ((p.id === myId ? '나  ' : '') + (p.name || '플레이어') + '  ' + charOf(p.char || 'charger').name) : '빈 자리';
+      button(x + team * 268, y + row * 50, 252, 42, who, () => takeSeat(i), {on:!!(p && p.id === myId), off:!p && !mine, fs:14});
     }
-    y += half * 22 + 10;
-    const mine = roster.find(p => p.id === myId) || (net.role === 'host' ? room.host : null);
+    y += half * 50 + 8;
     text('캐릭터', x, y, 13, '#8d8a82');
-    y += 16;
+    y += 18;
     CHARS.forEach((c, i) => {
-      button(x + i * 72, y, 68, 32, c.name, () => lobbyChar(c.id), {on:mine && mine.char === c.id, fs:12, align:'center', pad:0});
+      const col = i % 5;
+      const row = Math.floor(i / 5);
+      button(x + col * 104, y + row * 40, 96, 32, c.name, () => lobbyChar(c.id), {on:mine && mine.char === c.id, fs:13, align:'center', pad:0});
     });
-    y += 44;
+    y += 88;
     if (net.role === 'host') {
-      button(x, y, 120, 34, '대전', () => setRoomSize(room.size || size), {on:room.mode === 'duel' || room.mode === 'raid'});
-      y += 42;
       button(x, y, 120, 34, '잼 그랩', () => setObjective('gem'), {on:room.mode === 'gem'});
       button(x + 128, y, 140, 34, '배스킷 볼', () => setObjective('ball'), {on:room.mode === 'ball'});
       button(x + 276, y, 100, 34, '점령', () => setObjective('hill'), {on:room.mode === 'hill'});
-      y += 42;
-      const ready = roster.length >= size;
+      y += 46;
+      const ready = seats.filter(Boolean).length >= size;
       button(x, y, 160, 40, '시작', () => startOnline(), {off:!ready});
       if (!ready) button(x + 176, y, 168, 40, 'AI로 채우기', () => fillWithAi());
     } else {
       const modeText = room.mode === 'gem' ? '잼 그랩'
         : room.mode === 'ball' ? '배스킷 볼'
         : room.mode === 'hill' ? '점령'
-        : (size === 6 ? '3대3' : size === 4 ? '2대2' : '대전');
+        : (size === 6 ? '3대3' : size === 4 ? '2대2' : '1대1');
       text(modeText, x, y, 16, '#eceae4');
       text('방장이 시작하면 들어갑니다.', x, y + 28, 14, '#8d8a82');
     }
@@ -4868,15 +4884,29 @@ function playerList(room) {
   const seen = new Set();
   return list.filter(p => p && p.id && !seen.has(p.id) && seen.add(p.id));
 }
+function seatArray(room) {
+  const size = roomNeed(room);
+  const seats = Array.from({length: size}, () => null);
+  const all = playerList(room).slice().sort((a, b) => (a.ts || 0) - (b.ts || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  for (const p of all) {
+    let s = Number.isInteger(p.slot) ? p.slot : -1;
+    if (s < 0 || s >= size || seats[s]) s = seats.findIndex(x => !x);
+    if (s < 0) continue;
+    seats[s] = Object.assign({}, p, {slot:s});
+  }
+  return seats;
+}
 function orderedPlayers(room) {
-  const all = playerList(room);
-  const hostId = (room.host && room.host.id) || (all[0] && all[0].id);
-  const host = all.find(p => p.id === hostId) || room.host;
-  const rest = all.filter(p => p.id !== hostId).sort((a, b) => (a.ts || 0) - (b.ts || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  const list = [];
-  if (host && host.id) list.push(Object.assign({}, host, {slot:0}));
-  rest.forEach((p, i) => list.push(Object.assign({}, p, {slot:i + 1})));
-  return list;
+  return seatArray(room).filter(Boolean);
+}
+function hostOf(list) {
+  const id = net.room && net.room.host && net.room.host.id;
+  return (list || []).find(p => p.id === id) || (net.room && net.room.host) || (list && list[0]) || null;
+}
+function copyCode() {
+  const c = net.code || '';
+  if (!c || !navigator.clipboard || !navigator.clipboard.writeText) return;
+  navigator.clipboard.writeText(c).catch(() => {});
 }
 function seatMap(list) {
   const players = {};
@@ -4884,21 +4914,26 @@ function seatMap(list) {
   return players;
 }
 async function makeRoom() {
-  if (fb.state !== 'ok') { await pingFB(); if (fb.state !== 'ok') return; }
+  S.roomErr = '';
+  if (fb.state !== 'ok') { await pingFB(); if (fb.state !== 'ok') { S.roomErr = '연결되지 않았습니다'; return; } }
   try {
     let code = '', room = null;
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 8; i++) {
       code = makeCode();
       const exists = await fbReq('GET', '/rooms/' + code);
       if (exists) continue;
       const me = {id:myId, name:myName(), char:S.me || 'charger', lv:acct.rise[S.me || 'charger'] || 0, slot:0, ts:Date.now()};
-      room = {host:me, guest:null, players:seatMap([me]), size:2, mode:'duel', raid:'slime', stage:1, status:'lobby', ping:Date.now()};
+      room = {host:me, players:seatMap([me]), size:2, mode:'duel', raid:'slime', stage:1, status:'lobby', ping:Date.now()};
       await fbReq('PUT', '/rooms/' + code, room);
+      const check = await fbReq('GET', '/rooms/' + code);
+      if (!check || !check.host || check.host.id !== myId) { room = null; continue; }
+      room = check;
       break;
     }
-    if (!room) return;
+    if (!room) { S.roomErr = '방을 만들지 못했습니다'; return; }
+    net.holdLobby = false;
     net.code = code; net.role = 'host'; net.room = room; S.screen = 'lobby';
-  } catch (e) { fbFail(e); }
+  } catch (e) { fbFail(e); S.roomErr = '방을 만들지 못했습니다'; }
 }
 async function tryJoin() {
   S.joinErr = '';
@@ -4907,19 +4942,27 @@ async function tryJoin() {
   try {
     const room = await fbReq('GET', '/rooms/' + code);
     if (!room || !room.host) { S.joinErr = '없는 방입니다'; return; }
-    if (room.status === 'play') { S.joinErr = '이미 시작된 방입니다'; return; }
-    if (room.host.id === myId) { S.joinErr = '내가 만든 방입니다'; return; }
-    const size = roomNeed(room);
-    if (orderedPlayers(room).some(p => p.id === myId)) {
-      net.code = code; net.role = 'guest'; net.room = room; S.screen = 'lobby';
+    if (room.status === 'play' && room.host.id !== myId) { S.joinErr = '이미 시작된 방입니다'; return; }
+    const seats = seatArray(room);
+    if (seats.some(p => p && p.id === myId)) {
+      net.holdLobby = room.status !== 'play';
+      net.code = code; net.role = room.host.id === myId ? 'host' : 'guest'; net.room = room;
+      if (room.status === 'play') beginOnlineGame(room);
+      else S.screen = 'lobby';
       return;
     }
-    if (orderedPlayers(room).length >= size) { S.joinErr = '이미 가득 찬 방입니다'; return; }
-    const me = {id:myId, name:myName(), char:S.me || 'charger', lv:acct.rise[S.me || 'charger'] || 0, ts:Date.now()};
+    if (room.host.id === myId) {
+      net.holdLobby = false;
+      net.code = code; net.role = 'host'; net.room = room; S.screen = 'lobby';
+      return;
+    }
+    const free = seats.findIndex(s => !s);
+    if (free < 0) { S.joinErr = '이미 가득 찬 방입니다'; return; }
+    const me = {id:myId, name:myName(), char:S.me || 'charger', lv:acct.rise[S.me || 'charger'] || 0, slot:free, ts:Date.now()};
     await fbReq('PUT', '/rooms/' + code + '/players/' + myId, me);
     const again = await fbReq('GET', '/rooms/' + code);
-    const mine = orderedPlayers(again).findIndex(p => p.id === myId);
-    if (mine < 0 || mine >= roomNeed(again)) {
+    const mine = seatArray(again).findIndex(p => p && p.id === myId);
+    if (mine < 0) {
       await fbReq('DELETE', '/rooms/' + code + '/players/' + myId);
       S.joinErr = '이미 가득 찬 방입니다';
       return;
@@ -4930,6 +4973,7 @@ async function tryJoin() {
     again.players = again.players || {};
     again.players[myId] = me;
     if (mine === 1) again.guest = me;
+    net.holdLobby = false;
     net.code = code; net.role = 'guest'; net.room = again; S.screen = 'lobby';
   } catch (e) { fbFail(e); S.joinErr = '연결 실패'; }
 }
@@ -4940,55 +4984,108 @@ async function patchRoom(partial) {
 }
 async function writeSeats(list, extra) {
   const players = seatMap(list);
-  const guest = list[1] || null;
-  const partial = Object.assign({players, guest}, extra || {});
+  const guest = list.find(p => p.slot === 1) || null;
+  const partial = Object.assign({players}, extra || {});
+  if (guest) partial.guest = guest;
   Object.assign(net.room, partial);
+  net.room.players = players;
+  net.room.guest = guest;
   await fbReq('PATCH', '/rooms/' + net.code, partial);
+  if (!guest) await fbReq('DELETE', '/rooms/' + net.code + '/guest');
 }
 async function fillWithAi() {
   if (net.role !== 'host' || !net.room || !net.code) return;
   const size = roomNeed(net.room);
-  const list = orderedPlayers(net.room).slice(0, size);
-  if (list.length >= size) return;
-  while (list.length < size) {
+  const seats = seatArray(net.room);
+  if (seats.filter(Boolean).length >= size) return;
+  for (let i = 0; i < size; i++) {
+    if (seats[i]) continue;
     const char = rollChar();
-    list.push({id:'ai' + Math.random().toString(36).slice(2, 8), name:'AI', char, ai:true, ts:Date.now() + list.length, slot:list.length});
+    seats[i] = {id:'ai' + Math.random().toString(36).slice(2, 8), name:'AI', char, ai:true, ts:Date.now() + i, slot:i};
   }
-  try { await writeSeats(list, {size: net.room.mode === 'raid' ? 2 : (net.room.size || size)}); } catch (e) { fbFail(e); }
+  const list = seats.filter(Boolean);
+  try { await writeSeats(list, {host:hostOf(list), size: net.room.mode === 'raid' ? 2 : (net.room.size || size)}); } catch (e) { fbFail(e); }
 }
 async function setRoomSize(size) {
   if (net.role !== 'host' || !net.room) return;
   const kept = orderedPlayers(net.room).slice(0, size);
-  try { await writeSeats(kept, {size, mode:'duel'}); } catch (e) { fbFail(e); }
+  kept.forEach((p, i) => { p.slot = i; });
+  try { await writeSeats(kept, {host:hostOf(kept), size, mode:'duel'}); } catch (e) { fbFail(e); }
 }
 async function setRaidMode() {
   if (net.role !== 'host' || !net.room) return;
   const kept = orderedPlayers(net.room).slice(0, 2);
-  try { await writeSeats(kept, {size:2, mode:'raid'}); } catch (e) { fbFail(e); }
+  kept.forEach((p, i) => { p.slot = i; });
+  try { await writeSeats(kept, {host:hostOf(kept), size:2, mode:'raid'}); } catch (e) { fbFail(e); }
 }
 async function setObjective(kind) {
   if (net.role !== 'host' || !net.room) return;
   const kept = orderedPlayers(net.room).slice(0, 6);
-  try { await writeSeats(kept, {size:6, mode:kind}); } catch (e) { fbFail(e); }
+  kept.forEach((p, i) => { p.slot = i; });
+  try { await writeSeats(kept, {host:hostOf(kept), size:6, mode:kind}); } catch (e) { fbFail(e); }
 }
 async function lobbyChar(id) {
   if (!net.room || !net.code) return;
-  const list = orderedPlayers(net.room);
-  const i = list.findIndex(p => p.id === myId);
+  const seats = seatArray(net.room);
+  const i = seats.findIndex(p => p && p.id === myId);
   if (i < 0) return;
-  list[i] = Object.assign({}, list[i], {char:id, name:myName()});
+  seats[i] = Object.assign({}, seats[i], {char:id, name:myName(), slot:i});
+  const list = seats.filter(Boolean);
   try {
-    if (net.role === 'host') await writeSeats(list, {host:list[0]});
-    else {
-      await fbReq('PUT', '/rooms/' + net.code + '/players/' + myId, list[i]);
-      if (i === 1) await fbReq('PUT', '/rooms/' + net.code + '/guest', list[i]);
-      net.room.players = seatMap(list);
-      if (i === 1) net.room.guest = list[i];
-    }
+    if (net.role === 'host') await writeSeats(list, {host:hostOf(list)});
+    else await writeSeats(list);
   } catch (e) { fbFail(e); }
 }
+async function takeSeat(slot) {
+  if (net.seatBusy || !net.room || !net.code || S.screen !== 'lobby') return;
+  const size = roomNeed(net.room);
+  if (slot < 0 || slot >= size) return;
+  const seats = seatArray(net.room);
+  const from = seats.findIndex(p => p && p.id === myId);
+  if (from < 0 || from === slot) return;
+  const mine = Object.assign({}, seats[from], {slot});
+  const next = seats.slice();
+  next[from] = seats[slot] ? Object.assign({}, seats[slot], {slot:from}) : null;
+  next[slot] = mine;
+  const list = next.filter(Boolean);
+  net.seatBusy = true;
+  try {
+    if (net.role === 'host') await writeSeats(list, {host:hostOf(list)});
+    else await writeSeats(list);
+  } catch (e) { fbFail(e); }
+  finally { net.seatBusy = false; }
+}
+async function backToLobby() {
+  if (!net.code) { leaveMatch(); return; }
+  return roomLock(async () => {
+    if (!net.code) return;
+    net.playing = false;
+    net.holdLobby = true;
+    closeStream();
+    game = null;
+    S.pause = false;
+    S.screen = 'lobby';
+    if (net.role !== 'host') return;
+    try {
+      await fbReq('PATCH', '/rooms/' + net.code, {status:'lobby', ping:Date.now()});
+      await fbReq('DELETE', '/rooms/' + net.code + '/in');
+      await fbReq('DELETE', '/rooms/' + net.code + '/state');
+      const room = await fbReq('GET', '/rooms/' + net.code);
+      if (room && room.host) net.room = room;
+      net.holdLobby = false;
+    } catch (e) { fbFail(e); }
+  });
+}
+function roomLock(fn) {
+  const prev = net.roomOp || Promise.resolve();
+  const run = prev.then(fn, fn);
+  net.roomOp = run.then(() => {}, () => {});
+  return run;
+}
 async function startOnline() {
+  return roomLock(async () => {
   if (!net.code) return;
+  net.holdLobby = false;
   try {
     const room = await fbReq('GET', '/rooms/' + net.code);
     if (!room) return;
@@ -4999,6 +5096,7 @@ async function startOnline() {
     await fbReq('PATCH', '/rooms/' + net.code, {status:'play', ping:Date.now()});
     beginOnlineGame(room);
   } catch (e) { fbFail(e); }
+  });
 }
 function restartOnline() {
   const room = net.room;
@@ -5010,6 +5108,7 @@ function restartOnline() {
 }
 function beginOnlineGame(room) {
   if (net.playing) return;
+  net.holdLobby = false;
   net.role = net.role || 'host';
   const list = orderedPlayers(room);
   startTeam(list);
@@ -5451,7 +5550,7 @@ function applySnap(s) {
 }
 function exitRoom() {
   closeStream();
-  net.role = null; net.code = ''; net.room = null; net.playing = false; net.remote = null;
+  net.role = null; net.code = ''; net.room = null; net.playing = false; net.holdLobby = false; net.remote = null;
   S.screen = 'pvp';
 }
 async function pollOnline() {
@@ -5466,13 +5565,30 @@ async function pollOnline() {
         const size = roomNeed(room);
         const kept = orderedPlayers(room).slice(0, size);
         const raw = playerList(room);
-        if (raw.length !== kept.length) await writeSeats(kept, {size: room.mode === 'raid' ? 2 : (room.size || size)});
-      } else if (!orderedPlayers(room).some(p => p.id === myId)) { exitRoom(); return; }
-      if (room.status === 'play') beginOnlineGame(net.room);
+        if (raw.length !== kept.length) {
+          kept.forEach((p, i) => { p.slot = i; });
+          await writeSeats(kept, {host:hostOf(kept), size: room.mode === 'raid' ? 2 : (room.size || size)});
+        }
+      } else if (!orderedPlayers(room).some(p => p.id === myId) && !(room.host && room.host.id === myId)) { exitRoom(); return; }
+      if (room.status === 'play') {
+        if (!net.holdLobby) beginOnlineGame(net.room);
+      } else net.holdLobby = false;
     } else if (S.screen === 'battle' && net.role === 'host') {
       const all = await fbReq('GET', '/rooms/' + net.code + '/in') || {};
       if (all && typeof all === 'object') Object.entries(all).forEach(([id, inp]) => acceptOne(id, inp));
     } else if (S.screen === 'battle' && net.role === 'guest') {
+      const room = await fbReq('GET', '/rooms/' + net.code);
+      if (!room || !room.host) { exitRoom(); return; }
+      net.room = room;
+      if (room.status !== 'play') {
+        net.playing = false;
+        net.holdLobby = false;
+        closeStream();
+        game = null;
+        S.pause = false;
+        S.screen = 'lobby';
+        return;
+      }
       const st = await fbReq('GET', '/rooms/' + net.code + '/state');
       if (st) applySnap(st);
     }
