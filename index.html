@@ -106,6 +106,20 @@ function sfx(name) {
   else if (name === 'back') tone(294, 0.1, 'sine', 0.035, 440);
   else if (name === 'gem') tone(880, 0.05, 'sine', 0.03, 1170);
 }
+function pad(freq, dur, gain, delay) {
+  const a = audio();
+  if (!a) return;
+  const t = a.currentTime + (delay || 0);
+  const o = a.createOscillator();
+  const g = a.createGain();
+  o.type = 'sine';
+  o.frequency.value = Math.max(40, freq);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(gain, t + 0.9);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(a.destination);
+  o.start(t); o.stop(t + dur + 0.05);
+}
 function stopMusic() {
   for (const n of music.nodes) { try { n.stop(); } catch (e) {} }
   music.nodes = [];
@@ -128,23 +142,28 @@ function tickMusic() {
     music.mode = mode;
     music.step = 0;
     music.next = actx.currentTime + 0.06;
-    const o = actx.createOscillator();
-    const g = actx.createGain();
-    o.type = 'sine';
-    o.frequency.value = mode === 'battle' ? 49 : 55;
-    g.gain.value = 0.02;
-    o.connect(g); g.connect(actx.destination);
-    o.start();
-    music.nodes.push(o);
+    const root = mode === 'battle' ? 49 : 55;
+    for (const [freq, gain] of [[root, 0.011], [root * 1.5, 0.0045]]) {
+      const o = actx.createOscillator();
+      const g = actx.createGain();
+      o.type = 'sine';
+      o.frequency.value = freq;
+      g.gain.value = gain;
+      o.connect(g); g.connect(actx.destination);
+      o.start();
+      music.nodes.push(o);
+    }
   }
   const now = actx.currentTime;
+  if (music.next < now - 0.2) music.next = now;
   const phrase = BED[mode];
-  const gap = mode === 'battle' ? 0.52 : 0.84;
+  const gap = mode === 'battle' ? 3.4 : 4.6;
+  const dur = mode === 'battle' ? 5.2 : 6.8;
   while (music.next < now + 0.4) {
     const delay = Math.max(0, music.next - now);
     const f = phrase[music.step % phrase.length];
-    tone(f, mode === 'battle' ? 0.46 : 0.9, 'sine', 0.03, f * 0.96, delay);
-    if (mode === 'battle' && music.step % 2 === 0) tone(73, 0.08, 'sine', 0.018, 52, delay);
+    pad(f, dur, 0.011, delay);
+    pad(f * 2, dur, 0.0035, delay);
     music.step++;
     music.next += gap;
   }
