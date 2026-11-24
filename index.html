@@ -239,7 +239,7 @@ const CHARGE = {
   spinner:'포인터 방향으로 8칸을 5초 동안 전진한다.\n8×8 범위에서 0.5초마다 4피해',
   timer:'아군의 체력, 위치, 쿨타임을 저장한다.\nE를 다시 누르면 그 값으로 돌아간다'
 };
-const HYPER = {charger:1, chainer:1, shifter:1, howler:1, graviter:1, connector:1, exploder:1, explorer:1, spinner:1};
+const HYPER = {charger:1, chainer:1, shifter:1, howler:1, graviter:1, connector:1, exploder:1, explorer:1, spinner:1, timer:1};
 const HYPER_TEXT = {
   charger:'같은 돌진이다.\n던진 적의 시야가 4초 동안 2칸이 된다',
   chainer:'같은 갈고리다.\n맞은 적을 자신에게 끌어온다',
@@ -249,7 +249,8 @@ const HYPER_TEXT = {
   connector:'같은 분신이다.\n적마다 2마리, 체력 5. 공격이 게이지에 찬다',
   exploder:'10칸 안의 모든 적에게 14피해.\n3초 멈춤',
   explorer:'7초 동안 속도가 200%가 된다.\n화살은 7피해, 가젯과 같은 크기',
-  spinner:'같은 전진이다.\n10칸을 가고, 0.5초마다 8피해'
+  spinner:'같은 전진이다.\n10칸을 가고, 0.5초마다 8피해',
+  timer:'아군의 궁극기를 바로 채운다.\n궁이 없는 아군은 체력을 가득 채운다'
 };
 
 const BW = 46, BH = 14;
@@ -1331,9 +1332,27 @@ function castCharge(e, hyper) {
     return;
   }
   if (e.char === 'timer') {
+    if (hyper) { fillAllyHyper(e); return; }
     e.teamSnap = fighters.filter(f => f.team === e.team && !f.dead).map(f => ({
       k:allyKey(f), hp:f.hp, x:f.x, y:f.y, l:f.cd.l || 0, r:f.cd.r || 0, c:(f.cd && f.cd.ch) || 0
     }));
+  }
+}
+function fillAllyHyper(e) {
+  if (net.role === 'guest') return;
+  for (const f of fighters) {
+    if (f === e || f.dead || f.team !== e.team) continue;
+    if (HYPER[f.char] && (f.gadLv || 0) >= 12) {
+      f.chargeUsed = 3;
+      fx.push({kind:'line', x:CXx(e), y:CYy(e), x2:CXx(f), y2:CYy(f), life:0.28, max:0.28, color:'#e23b3b'});
+      nums.push({x:CXx(f), y:f.y + f.h + 0.35, vy:1.4, life:0.7, text:'궁', color:'#e23b3b'});
+    } else {
+      const before = f.hp || 0;
+      f.hp = f.maxHp;
+      const gain = Math.max(0, Math.round(f.hp - before));
+      fx.push({x:CXx(f), y:CYy(f), r:1.1, life:0.24, max:0.24, color:'#d08a6a', out:1});
+      if (gain) nums.push({x:CXx(f), y:f.y + f.h + 0.35, vy:1.4, life:0.7, text:'+' + gain, color:'#eceae4'});
+    }
   }
 }
 function restoreTeam(e) {
