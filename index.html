@@ -2471,6 +2471,212 @@ function tickRespawn(dt) {
     if (f.respawn <= 0) reviveFighter(f);
   }
 }
+function ownHoop(team) {
+  return HOOPS.find(h => h.team === team) || HOOPS[0];
+}
+function ballBack(hoop) {
+  return hoop.x > BW / 2 ? -1 : 1;
+}
+function onAttackSide(x, hoop) {
+  return hoop.x > BW / 2 ? x < hoop.x - 2.2 : x > hoop.x + 2.2;
+}
+function ballLeadX(b) {
+  if (b.shot && (b.vy || 0) > 0) {
+    const tUp = b.vy / 20;
+    const yTop = b.y + b.vy * tUp - 10 * tUp * tUp;
+    const drop = Math.max(0, yTop - 5.2);
+    const t = clamp(tUp + Math.sqrt(drop / 10), 0.1, 1.35);
+    return clamp(b.x + b.vx * t, 0.8, BW - 0.8);
+  }
+  let t = 0.25;
+  if (b.vy < -0.5) t = clamp((b.y - 1.2) / Math.max(2, -b.vy), 0.08, 0.65);
+  else if (b.vy > 0.5) t = 0.35;
+  return clamp(b.x + (b.vx || 0) * t, 0.8, BW - 0.8);
+}
+function rankBy(team, x, y) {
+  return fighters.filter(f => !f.dead && f.team === team).sort((a, c) => {
+    const da = Math.hypot(CXx(a) - x, (a.y + 0.5) - y);
+    const dc = Math.hypot(CXx(c) - x, (c.y + 0.5) - y);
+    return da - dc || a.id - c.id;
+  });
+}
+function ballGo(e, inp, x) {
+  if (CXx(e) < x - 0.4) { inp.left = false; inp.right = true; }
+  else if (CXx(e) > x + 0.4) { inp.right = false; inp.left = true; }
+  else { inp.left = false; inp.right = false; }
+}
+function ballSeek(e, inp, x, y) {
+  let aim = x;
+  if (y != null && y < e.y - 0.9) {
+    const plat = PLATS.find(p => e.y > p.y - 0.35 && e.y < p.y + 0.5 && CXx(e) > p.x - 1.8 && CXx(e) < p.x + p.w + 1.8);
+    if (plat && x > plat.x && x < plat.x + plat.w && (e.onGround || e.y > plat.y - 0.15)) {
+      const left = plat.x - 1.6, right = plat.x + plat.w + 1.6;
+      aim = Math.abs(x - left) <= Math.abs(x - right) ? left : right;
+    }
+  }
+  ballGo(e, inp, aim);
+  ballHop(e, inp, aim, y);
+}
+function ballHop(e, inp, goalX, goalY) {
+  const dir = Math.sign(goalX - CXx(e));
+  const probe = dir > 0 ? e.x + e.w + 0.45 : e.x - 0.45;
+  const low = e.y < 4.35;
+  const solid = !!dir && low && SOLIDS.some(s => probe >= s.x - 0.25 && probe <= s.x + s.w + 0.25 && e.y < s.y + s.h - 0.05);
+  const into = !!e.wall && low && !!dir && ((e.wall > 0 && dir > 0) || (e.wall < 0 && dir < 0));
+  const above = goalY != null && goalY > e.y + 1.35 && Math.abs(goalX - CXx(e)) < 2.1;
+  let hop = false;
+  if ((solid || into) && e.onGround) hop = true;
+  else if ((solid || into) && !e.onGround && e.jumps === 1 && e.y > 2.4) hop = true;
+  else if (above && e.onGround) hop = true;
+  else if (above && !e.onGround && e.jumps === 1 && e.y > 2.2 && goalY > e.y + 2.2) hop = true;
+  if (hop) {
+    inp.jump = true;
+    inp.jumpEdge = !e._pj;
+    if (inp.jumpEdge && into && e.char === 'charger') { inp.left = false; inp.right = false; }
+    e._pj = true;
+  } else {
+    inp.jump = false;
+    inp.jumpEdge = false;
+    e._pj = false;
+  }
+}
+function handsOff(e, inp) {
+  inp.lmb = false;
+  inp.rmb = false;
+  inp.gad = false;
+  inp.chg = false;
+  inp.hyper = false;
+  inp.lPressed = false;
+  inp.rPressed = false;
+  inp.gadPressed = false;
+  inp.chgPressed = false;
+  inp.hyperPressed = false;
+  inp.lReleased = !!e.anchored;
+  inp.rReleased = false;
+}
+function shotArcClear(e, ox, oy, tx, ty) {
+  const lob = lobTo(ox, oy, tx, ty);
+  for (const u of [0.28, 0.48, 0.68, 0.86]) {
+    const tt = lob.t * u;
+    const x = ox + lob.vx * tt;
+    const y = oy + lob.vy * tt - 10 * tt * tt;
+    for (const f of fighters) {
+      if (f === e || f.dead) continue;
+      if (Math.hypot(CXx(f) - ox, (f.y + f.h * 0.5) - oy) < 1.8) continue;
+      if (Math.hypot(CXx(f) - x, (f.y + f.h * 0.5) - y) < 1.05) return false;
+    }
+  }
+  return true;
+}
+function openMate(e, hoop) {
+  let best = null, bestS = -1e9;
+  for (const f of fighters) {
+    if (f === e || f.dead || f.team !== e.team) continue;
+    if (e._passFrom && f === e._passFrom) continue;
+    let press = 99;
+    for (const o of fighters) {
+      if (o.dead || o.team === e.team) continue;
+      press = Math.min(press, distC(f, o));
+    }
+    if (press < 2.4) continue;
+    const closer = Math.abs(CXx(e) - hoop.x) - Math.abs(CXx(f) - hoop.x);
+    if (closer < -8) continue;
+    const s = closer * 3 + press;
+    if (s > bestS) { bestS = s; best = f; }
+  }
+  return best;
+}
+function steerBall(e, inp) {
+  const b = game.ball;
+  const hoop = ownHoop(e.team);
+  const back = ballBack(hoop);
+  const holder = b.holder && !b.holder.dead ? b.holder : null;
+  if (holder === e) e.ballHold = (e.ballHold || 0) + 1;
+  else e.ballHold = 0;
+  if ((e.ballHold || 0) > 45) e._passFrom = null;
+  if (holder === e) {
+    handsOff(e, inp);
+    e._pass = null;
+    const spot = hoop.x + back * 4.2;
+    ballGo(e, inp, spot);
+    ballHop(e, inp, spot, null);
+    inp.aimX = hoop.x;
+    inp.aimY = hoop.y + 0.6;
+    const ox = CXx(e), oy = e.y + e.h * 0.65;
+    const dx = Math.abs(ox - hoop.x);
+    const side = onAttackSide(ox, hoop);
+    const ready = (e.throwCd || 0) <= 0 && e.ballHold > 8;
+    const clear = shotArcClear(e, ox, oy, hoop.x, hoop.y);
+    const boxed = SOLIDS.some(s => ox > s.x - 0.2 && ox < s.x + s.w + 0.2 && oy < s.y + s.h + 0.2);
+    const foe = nearestEnemy(e);
+    const glued = !!(foe && distC(e, foe) < 1.7);
+    const wantShot = ready && side && !boxed && dx > 2.5 && dx < 10.4 && (clear || dx < 4.5);
+    if (wantShot) inp.throw = true;
+    else if (glued && e.ballHold > 36) {
+      const mate = openMate(e, hoop);
+      if (mate) { e._pass = mate; inp.throw = true; }
+    }
+    if (e._pass) {
+      inp.aimX = CXx(e._pass);
+      inp.aimY = e._pass.y + e._pass.h * 0.7;
+    }
+    return;
+  }
+  if (!holder) {
+    const lead = ballLeadX(b);
+    const rank = rankBy(e.team, lead, b.y);
+    const mine = rank.indexOf(e);
+    if (mine === 0) {
+      handsOff(e, inp);
+      ballSeek(e, inp, lead, b.y);
+      inp.aimX = b.x;
+      inp.aimY = b.y;
+    } else {
+      const hang = hoop.x + back * (7.5 + mine * 3);
+      const park = Math.abs(hang - lead) < 3.4 ? lead + back * (3.4 + mine) : hang;
+      ballGo(e, inp, clamp(park, 1.2, BW - 1.2));
+      ballHop(e, inp, park, null);
+    }
+    return;
+  }
+  if (holder.team !== e.team) {
+    const their = ownHoop(holder.team);
+    const rank = rankBy(e.team, CXx(holder), holder.y);
+    const mine = rank.indexOf(e);
+    inp.aimX = CXx(holder);
+    inp.aimY = holder.y + holder.h * 0.55;
+    if (mine === 0) {
+      ballSeek(e, inp, CXx(holder), holder.y + holder.h * 0.4);
+      return;
+    }
+    handsOff(e, inp);
+    const ox = CXx(holder);
+    const attack = onAttackSide(ox, their);
+    const dx = Math.abs(ox - their.x);
+    if (mine === 1 && attack && dx < 12) {
+      const lob = lobTo(ox, holder.y + holder.h * 0.65, their.x, their.y);
+      const tt = lob.t * 0.55;
+      const x = ox + lob.vx * tt;
+      const y = holder.y + holder.h * 0.65 + lob.vy * tt - 10 * tt * tt;
+      ballGo(e, inp, clamp(x, 1.2, BW - 1.2));
+      ballHop(e, inp, x, y);
+    } else {
+      const depth = mine === 1 ? 6.2 : 3.3;
+      const spot = their.x + ballBack(their) * depth;
+      ballGo(e, inp, spot);
+      ballHop(e, inp, spot, null);
+    }
+    return;
+  }
+  handsOff(e, inp);
+  const holdX = CXx(holder);
+  const mates = rankBy(e.team, holdX, holder.y).filter(f => f !== holder);
+  const mine = Math.max(0, mates.indexOf(e));
+  let spot = holdX + back * (2.8 + mine * 2.5);
+  if (Math.abs(spot - hoop.x) < Math.abs(holdX - hoop.x)) spot = holdX - back * (2.8 + mine * 2.5);
+  ballGo(e, inp, clamp(spot, 1.2, BW - 1.2));
+  ballHop(e, inp, spot, null);
+}
 function steerObjective(e, inp) {
   if (!inp || e.dead) return;
   const go = (x) => {
@@ -2489,18 +2695,7 @@ function steerObjective(e, inp) {
       if (best.y > e.y + 1.5 && Math.abs(best.x - CXx(e)) < 1.6 && e.onGround) inp.jump = true;
     }
   } else if (game.mode === 'ball' && game.ball) {
-    const b = game.ball;
-    const hoop = HOOPS.find(h => h.team === e.team);
-    if (b.holder === e && hoop) {
-      go(hoop.x);
-      inp.aimX = hoop.x;
-      inp.aimY = hoop.y + 2.4;
-      if (Math.abs(CXx(e) - hoop.x) < 13 && (e.throwCd || 0) <= 0) inp.throw = true;
-    } else if (!b.holder) {
-      const foe = nearestEnemy(e);
-      if (!foe || distC(e, foe) > 2.3) go(b.x);
-      if (b.y > e.y + 1.5 && Math.abs(b.x - CXx(e)) < 1.4 && e.onGround) inp.jump = true;
-    } else if (b.holder.team !== e.team) go(CXx(b.holder));
+    steerBall(e, inp);
   } else if (game.mode === 'hill') {
     const lo = HILL.x + 0.85, hi = HILL.x + HILL.w - 0.85;
     const spots = [HILL.x + HILL.w / 2, lo + 0.3, hi - 0.3];
@@ -2547,7 +2742,7 @@ function lobTo(ox, oy, tx, ty) {
     vx = dx / t;
     vy = dy / t + 10 * t;
   }
-  return {vx, vy};
+  return {vx, vy, t};
 }
 function throwBall(e) {
   const b = game.ball;
@@ -2555,14 +2750,18 @@ function throwBall(e) {
   const ox = CXx(e), oy = e.y + e.h * 0.65;
   b.holder = null;
   b.side = e.team;
-  b.shot = 1;
   b.by = e;
   b.x = ox;
   b.y = oy;
   b.lock = 0.28;
   e.throwCd = 0.75;
-  let tx, ty;
-  if (e.ai) {
+  let tx, ty, shot = 1;
+  const pass = e.ai && e._pass && !e._pass.dead && e._pass.team === e.team;
+  if (pass) {
+    tx = CXx(e._pass);
+    ty = e._pass.y + e._pass.h * 0.7;
+    shot = 0;
+  } else if (e.ai) {
     const hoop = HOOPS.find(h => h.team === e.team) || HOOPS[0];
     tx = hoop.x; ty = hoop.y;
   } else {
@@ -2571,6 +2770,8 @@ function throwBall(e) {
     const mine = HOOPS.find(h => h.team === e.team);
     if (mine && Math.hypot(tx - mine.x, ty - mine.y) < 2.8) { tx = mine.x; ty = mine.y; }
   }
+  e._pass = null;
+  b.shot = shot;
   const lob = lobTo(ox, oy, tx, ty);
   b.vx = lob.vx;
   b.vy = lob.vy;
@@ -2751,10 +2952,13 @@ function updateBall(dt) {
     for (const f of fighters) {
       if (f.dead) continue;
       if (Math.hypot(CXx(f) - b.x, (f.y + f.h * 0.55) - b.y) < 1) {
+        const from = b.by && b.by !== f ? b.by : null;
         b.holder = f;
         b.side = f.team;
         b.shot = 0;
         b.by = null;
+        f.ballHold = 0;
+        f._passFrom = from && from.team === f.team ? from : null;
         if (!f.ai && (!net.role || f.owner === myId)) sfx('catch');
         break;
       }
