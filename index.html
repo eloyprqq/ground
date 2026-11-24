@@ -3295,8 +3295,8 @@ function drawActor(e, cam) {
     ctx.lineWidth = 1.5;
     ctx.stroke();
   }
-  if (e.kind !== 'fighter') {
-    const scale = e.kind === 'boss' ? 2 : 2;
+  if (e.kind !== 'fighter' && e.kind !== 'boss') {
+    const scale = 2;
     const slots = Math.ceil(e.maxHp / 2);
     const hw = heartsWidth(slots, scale);
     const hpPos = w2s(CXx(e), e.y + e.h + 0.35, cam);
@@ -3471,6 +3471,17 @@ function playerPlate(e, side, keys, dy) {
   const nameW = ctx.measureText(e.name).width;
   const preW = prefix ? ctx.measureText(prefix + '  ').width : 0;
   const start = left ? hx : hx + hw - preW - nameW;
+  if (e.dead) {
+    const sec = e.respawn > 0 ? (Math.ceil(e.respawn) + '초') : '사망';
+    if (left) {
+      text(sec, hx, nameY, 13, '#e23b3b', 'left');
+      text(e.name, hx + ctx.measureText(sec + '  ').width, nameY, 13, '#8d8a82', 'left');
+    } else {
+      text(e.name, hx + hw, nameY, 13, '#8d8a82', 'right');
+      text(sec, hx + hw - ctx.measureText(e.name + '  ').width, nameY, 13, '#e23b3b', 'right');
+    }
+    return;
+  }
   if (prefix) text(prefix, start, nameY, 13, leftHits ? charOf(e.char).color : '#e23b3b', 'left');
   text(e.name, start + preW, nameY, 13, '#eceae4', 'left');
   const hyperOn = HYPER[e.char] && (e.gadLv || 0) >= 12 && (e.chargeUsed || 0) >= 3;
@@ -3567,7 +3578,7 @@ function drawHUD(cam) {
     list.forEach(e => {
       const keys = plateKeys(e);
       playerPlate(e, side, keys, dy);
-      dy += keys ? ((e.gadLv || 0) >= 5 ? 146 : 118) : 72;
+      dy += e.dead ? 72 : (keys ? ((e.gadLv || 0) >= 5 ? 146 : 118) : 72);
     });
   };
   if (allies.length) paintSide(allies, 'left', feedH);
@@ -4324,49 +4335,69 @@ function frameMenu() {
     showName(false);
     text('AI 대전', x, 88, 26, '#eceae4');
     text('팀전은 내 캐릭터만 고릅니다. 나머지는 각자 무작위로 나옵니다.', x, 126, 14, '#8d8a82');
-    button(x, 168, 260, 40, '1대1', () => {
-      openPick('내 캐릭터', c => { S.me = c; openPick('AI 캐릭터', f => startDuel(c, f, {ai:true, name2:'AI'})); });
-    });
-    button(x, 212, 260, 40, '2대2', () => openPick('내 캐릭터', me => startAiTeam(4, me)));
-    button(x, 256, 260, 40, '3대3', () => openPick('내 캐릭터', me => startAiTeam(6, me)));
-    button(x, 312, 260, 40, '잼 그랩', () => openPick('내 캐릭터', me => startObjective('gem', me)));
-    button(x, 356, 260, 40, '배스킷 볼', () => openPick('내 캐릭터', me => startObjective('ball', me)));
-    button(x, 400, 260, 40, '점령', () => openPick('내 캐릭터', me => startObjective('hill', me)));
-    button(x, 444, 260, 40, '보스', () => openPick('내 캐릭터', me => { S.me = me; S.screen = 'bosses'; }));
+    let y = 164;
+    const head = (s) => { text(s, x, y, 13, '#8d8a82'); y += 22; };
+    const item = (s, fn) => { button(x, y, 260, 36, s, fn); y += 42; };
+    head('대전');
+    item('1대1', () => openPick('내 캐릭터', c => { S.me = c; openPick('AI 캐릭터', f => startDuel(c, f, {ai:true, name2:'AI'})); }));
+    item('2대2', () => openPick('내 캐릭터', me => startAiTeam(4, me)));
+    item('3대3', () => openPick('내 캐릭터', me => startAiTeam(6, me)));
+    y += 6;
+    head('규칙');
+    item('잼 그랩', () => openPick('내 캐릭터', me => startObjective('gem', me)));
+    item('배스킷 볼', () => openPick('내 캐릭터', me => startObjective('ball', me)));
+    item('점령', () => openPick('내 캐릭터', me => startObjective('hill', me)));
+    y += 6;
+    head('보스');
+    item('보스', () => openPick('내 캐릭터', me => { S.me = me; S.screen = 'bosses'; }));
     button(x, H - 72, 120, 40, '뒤로', () => { S.screen = 'title'; });
   } else if (S.screen === 'help') {
     showName(false);
     text('조작', x, 48, 26, '#eceae4');
-    const rows = [
-      ['이동', 'A  D. 위아래 키는 없음'],
-      ['점프', 'Space. 한 번 더 누르면 두 번'],
-      ['기술', '마우스 방향. 좌클릭, 우클릭'],
-      ['벽차기', '차져만. 벽을 보고 방향키와 Space'],
-      ['체력', '플레이어 20, 적 10, 핀트 5. 하트 하나당 2'],
-      ['금색 하트', '추가 체력. 맞으면 이쪽이 먼저 깎임'],
-      ['회복', '3초 동안 안 싸우면 천천히'],
-      ['시야', '7칸 밖은 안 보임'],
-      ['잡몹', '대전에서만. 잡으면 이속, 회복, 추가 체력'],
-      ['보스', '3대1. 아군이 있으면 10초 뒤 부활. 전멸하면 패배'],
-      ['2P', '방향키, 위 점프, K 좌클릭, L 우클릭'],
-      ['잼 그랩', '3대3. 보석 8개면 카운트. 사람 대전 방과 매칭도 됨'],
-      ['배스킷 볼', '3대3. 5점. 골 뒤 2초 만에 스폰. 사람 대전에서도 F로 던짐'],
-      ['점령', '3대3. 가운데를 12초. 사람 대전 방과 매칭도 됨'],
-      ['가젯', 'Q. 5레벨. 한 판에 3번. 쓰면 10초'],
-      ['차지', 'E. 9레벨. 이름 앞 숫자만큼 맞추면 사용. 쓰면 체력 5'],
-      ['하이퍼', 'Shift. 12레벨. 차지를 3번 쓰면 사용'],
-      ['계정', '승리하면 코인 4~7, PP 4~7. 30%는 둘 다. 영웅 창에서 상승'],
-      ['소리', 'M. 배경음과 효과음. 타이틀에서도 끔'],
-      ['교환', '10 코인으로 5 PP. 10 PP로 5 코인']
+    const blocks = [
+      ['조작', [
+        ['이동', 'A  D. 위아래 키는 없음'],
+        ['점프', 'Space. 한 번 더 누르면 두 번'],
+        ['기술', '마우스 방향. 좌클릭, 우클릭'],
+        ['벽차기', '차져만. 벽을 보고 방향키와 Space'],
+        ['2P', '방향키, 위 점프, K 좌클릭, L 우클릭'],
+        ['소리', 'M. 배경음과 효과음. 타이틀에서도 끔']
+      ]],
+      ['전투', [
+        ['체력', '플레이어 20, 적 10, 핀트 5. 하트 하나당 2'],
+        ['금색 하트', '추가 체력. 맞으면 이쪽이 먼저 깎임'],
+        ['회복', '3초 동안 안 싸우면 천천히'],
+        ['시야', '7칸 밖은 안 보임'],
+        ['잡몹', '대전에서만. 잡으면 이속, 회복, 추가 체력'],
+        ['가젯', 'Q. 5레벨. 한 판에 3번. 쓰면 10초'],
+        ['차지', 'E. 9레벨. 이름 앞 숫자만큼 맞추면 사용. 쓰면 체력 5'],
+        ['하이퍼', 'Shift. 12레벨. 차지를 3번 쓰면 사용']
+      ]],
+      ['모드', [
+        ['보스', '3대1. 아군이 있으면 10초 뒤 부활. 전멸하면 패배'],
+        ['잼 그랩', '3대3. 보석 8개면 카운트. 사람 대전 방과 매칭도 됨'],
+        ['배스킷 볼', '3대3. 5점. 골 뒤 2초 만에 스폰. 사람 대전에서도 F로 던짐'],
+        ['점령', '3대3. 가운데를 12초. 사람 대전 방과 매칭도 됨']
+      ]],
+      ['계정', [
+        ['계정', '승리하면 코인 4~7, PP 4~7. 30%는 둘 다. 영웅 창에서 상승'],
+        ['교환', '10 코인으로 5 PP. 10 PP로 5 코인']
+      ]]
     ];
-    const colW = Math.min(460, (W - x * 2 - 40) / 2);
-    rows.forEach((ln, i) => {
-      const col = W > 980 && i >= 6 ? 1 : 0;
-      const row = col ? i - 6 : i;
-      const lx = x + col * (colW + 40);
-      const ly = 100 + row * 36;
-      text(ln[0], lx, ly, 14, '#8d8a82');
-      text(ln[1], lx + 92, ly, 14, '#eceae4');
+    const wide = W > 980;
+    const colW = wide ? Math.min(520, (W - x * 2 - 48) / 2) : W - x * 2;
+    let ly = [96, 96];
+    blocks.forEach((b, i) => {
+      const col = wide ? (i < 2 ? 0 : 1) : 0;
+      const lx = x + col * (colW + 48);
+      text(b[0], lx, ly[col], 13, '#8d8a82');
+      ly[col] += 24;
+      b[1].forEach(ln => {
+        text(ln[0], lx, ly[col], 14, '#8d8a82');
+        text(ln[1], lx + 88, ly[col], 14, '#eceae4');
+        ly[col] += 28;
+      });
+      ly[col] += 16;
     });
     button(x, H - 72, 120, 40, '뒤로', () => { S.screen = 'title'; });
   } else if (S.screen === 'pick') {
@@ -4459,12 +4490,18 @@ function frameMenu() {
     showName(true);
     text('매칭', x, 88, 26, '#eceae4');
     text(charOf(S.me).name, x, 126, 14, '#8d8a82');
-    button(x, 168, 260, 40, '1대1', () => startQueue('duel', null, 2));
-    button(x, 212, 260, 40, '2대2', () => startQueue('duel', null, 4));
-    button(x, 256, 260, 40, '3대3', () => startQueue('duel', null, 6));
-    button(x, 312, 260, 40, '잼 그랩', () => startQueue('gem', null, 6));
-    button(x, 356, 260, 40, '배스킷 볼', () => startQueue('ball', null, 6));
-    button(x, 400, 260, 40, '점령', () => startQueue('hill', null, 6));
+    let y = 164;
+    const head = (s) => { text(s, x, y, 13, '#8d8a82'); y += 22; };
+    const item = (s, fn) => { button(x, y, 260, 36, s, fn); y += 42; };
+    head('대전');
+    item('1대1', () => startQueue('duel', null, 2));
+    item('2대2', () => startQueue('duel', null, 4));
+    item('3대3', () => startQueue('duel', null, 6));
+    y += 6;
+    head('규칙');
+    item('잼 그랩', () => startQueue('gem', null, 6));
+    item('배스킷 볼', () => startQueue('ball', null, 6));
+    item('점령', () => startQueue('hill', null, 6));
     button(x, H - 72, 120, 40, '뒤로', () => { S.screen = 'pvp'; });
   } else if (S.screen === 'queue') {
     showName(true);
