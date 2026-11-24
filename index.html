@@ -1897,20 +1897,100 @@ function bossAim(b) {
   list.sort((a, c) => distC(b, a) - distC(b, c));
   return list[0];
 }
+const BOSS_SAY = {
+  flop:'몸통박치기', spit:'점액',
+  cleave:'참격', rush:'돌진', bolt:'암흑탄',
+  poke:'삼연격', lance:'돌진창', spear:'창',
+  blink:'그림자', sweep:'어둠', shade:'그림자탄'
+};
+function bossAimAng(b) {
+  const t = bossAim(b);
+  const oy = b.y + b.h * 0.55;
+  if (!t) return b.facing < 0 ? Math.PI : 0;
+  return Math.atan2((t.y + 0.8) - oy, CXx(t) - CXx(b));
+}
+function bossTell(b, act, wind, dur, cd) {
+  b.tell = act;
+  b.tellT = wind;
+  b.tellDur = dur || 0.2;
+  b.tellFace = b.facing;
+  b.aimA = bossAimAng(b);
+  if (cd) b.cd = cd;
+  b.vx = 0;
+}
 function bossStart(b, act, time) {
-  b.act = act; b.actT = time; b.hid = act + (++NID); b._hit = {}; b.pokes = 0;
+  b.act = act; b.actT = time; b.hid = act + (++NID); b._hit = {}; b.pokes = 0; b._flared = 0;
   sfx('slam');
 }
-function bossArc(b, ox, oy, spread, speed, dmg, extra) {
-  const t = bossAim(b);
-  const base = t ? Math.atan2((t.y + 0.8) - oy, CXx(t) - ox) : (b.facing < 0 ? Math.PI : 0);
-  for (let i = 0; i < spread.length; i++) {
-    const a = base + spread[i];
-    spawnProj(Object.assign({
-      type:'bolt', x:ox, y:oy, vx:Math.cos(a) * speed, vy:Math.sin(a) * speed,
-      r:0.24, dmg, life:1.5, team:b.team, owner:b.id, grav:0
-    }, extra || {}));
+function bossRing(x, y, r, life, color) {
+  fx.push({x, y, r, life, max:life, color, out:1});
+}
+function bossSpark(b, act) {
+  const col = b.color || '#eceae4';
+  const hx = CXx(b) + (b.facing || 1) * 0.7;
+  const hy = b.y + b.h * 0.5;
+  if (act === 'flop') {
+    bossRing(hx, b.y + 0.2, 3.1, 0.48, col);
+    bossRing(hx, b.y + 0.2, 1.8, 0.36, '#fff');
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      fx.push({kind:'line', x:hx, y:b.y + 0.25, x2:hx + Math.cos(a) * 2.8, y2:b.y + 0.25 + Math.abs(Math.sin(a)) * 0.7, life:0.4, max:0.4, color:col});
+      fx.push({x:hx + Math.cos(a) * 1.5, y:b.y + 0.3 + Math.abs(Math.sin(a)) * 0.35, r:0.16, life:0.45, max:0.45, color:col});
+    }
+    shake = Math.min(9, shake + 5);
+  } else if (act === 'cleave' || act === 'sweep') {
+    const reach = act === 'sweep' ? 3.1 : 2.3;
+    for (let i = -5; i <= 5; i++) {
+      const a = (b.facing < 0 ? Math.PI : 0) + i * 0.22;
+      fx.push({kind:'line', x:CXx(b), y:hy, x2:CXx(b) + Math.cos(a) * reach, y2:hy + Math.sin(a) * reach * 0.5, life:0.36, max:0.36, color:i === 0 ? '#fff' : col});
+    }
+    bossRing(hx, hy, reach, 0.4, col);
+    bossRing(hx, hy, reach * 0.55, 0.28, '#fff');
+    shake = Math.min(9, shake + 4);
+  } else if (act === 'poke') {
+    const lift = ((b.pokes || 1) - 2) * 0.28;
+    fx.push({kind:'line', x:CXx(b), y:hy + lift, x2:CXx(b) + b.facing * 2, y2:hy + lift, life:0.12, max:0.12, color:'#fff'});
+    bossRing(hx, hy, 1.15, 0.12, col);
+  } else if (act === 'rush' || act === 'lance') {
+    fx.push({kind:'line', x:CXx(b) - b.facing * 0.8, y:hy, x2:CXx(b) + b.facing * 1.6, y2:hy, life:0.1, max:0.1, color:col});
+  } else if (act === 'blink') {
+    bossRing(CXx(b), CYy(b), 1.7, 0.28, col);
+    bossRing(CXx(b), CYy(b), 0.7, 0.16, '#fff');
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      fx.push({kind:'line', x:CXx(b), y:CYy(b), x2:CXx(b) + Math.cos(a) * 1.4, y2:CYy(b) + Math.sin(a) * 1.4, life:0.2, max:0.2, color:col});
+    }
+  } else {
+    bossRing(CXx(b) + b.facing * 0.5, b.y + b.h * 0.55, act === 'spear' ? 0.45 : 0.9, 0.16, col);
   }
+}
+function bossReleaseShot(b, act) {
+  const spec = {
+    spit:{spread:[-0.45, 0, 0.45], speed:9, dmg:3, extra:{grav:12, r:0.36, type:'goo', slow:0.72, slowT:2, bossFx:'#7dcea0'}},
+    bolt:{spread:[0], speed:10, dmg:5, extra:{r:0.46, life:1.5, bossFx:'#e23b3b'}},
+    spear:{spread:[0], speed:18, dmg:6, extra:{r:0.14, life:1.1, bossFx:'#e6e2d6'}},
+    shade:{spread:[-0.18, 0.18], speed:12, dmg:4, extra:{homing:1.6, life:1.8, r:0.22, bossFx:'#b9a6e0'}}
+  }[act];
+  const ox = CXx(b) + b.facing * 0.55;
+  const oy = b.y + b.h * 0.55;
+  const base = b.aimA || 0;
+  for (let i = 0; i < spec.spread.length; i++) {
+    const a = base + spec.spread[i];
+    spawnProj(Object.assign({
+      type:'bolt', x:ox, y:oy, vx:Math.cos(a) * spec.speed, vy:Math.sin(a) * spec.speed,
+      r:0.24, dmg:spec.dmg, life:1.5, team:b.team, owner:b.id, grav:0
+    }, spec.extra));
+  }
+  bossSpark(b, act);
+  bossStart(b, act, 0.26);
+}
+function bossReleaseBlink(b) {
+  const nx = b.markX, ny = b.markY;
+  bossSpark(b, 'blink');
+  if (nx == null || inSolid(nx, ny, b.w, b.h)) { b.blink = 0.5; return; }
+  b.x = nx; b.y = ny; b.vx = 0; b.vy = 0; b.blink = 3.4; b.iframe = 0.25;
+  bossSpark(b, 'blink');
+  b.act = 'blink'; b.actT = 0.35; b.hid = 'blink' + (++NID);
 }
 function bossBlow(b, r, dmg, opt) {
   const hx = CXx(b) + b.facing * r * 0.35;
@@ -1920,6 +2000,8 @@ function bossBlow(b, r, dmg, opt) {
     if (Math.hypot(CXx(f) - hx, CYy(f) - hy) > r) continue;
     b._hit[f.id] = 1;
     hurt(f, dmg, Object.assign({src:b, hid:b.hid + ':' + f.id, kb:7}, opt || {}));
+    fx.push({x:CXx(f), y:CYy(f), r:0.9, life:0.16, max:0.16, color:'#fff', out:1});
+    if (opt && opt.blind) fx.push({x:CXx(f), y:CYy(f), r:1.4, life:0.3, max:0.3, color:'#5c4a78'});
     if (opt && opt.stop) { f.stopT = Math.max(f.stopT || 0, opt.stop); f.vx = 0; f.vy = 0; }
     if (opt && opt.slow) applySlow(f, opt.slow, opt.slowT || 2);
     if (opt && opt.blind) f.blindT = Math.max(f.blindT || 0, opt.blind);
@@ -1931,6 +2013,8 @@ function bossLand(b, air) {
   b._hit = {};
   bossBlow(b, 2.2, 0, {slow:0.68, slowT:1.8});
   b._hit = keep;
+  bossRing(CXx(b), b.y + 0.15, 2.3, 0.32, '#7dcea0');
+  fx.push({x:CXx(b), y:b.y + 0.15, r:1.2, life:0.4, max:0.4, color:'#7dcea0'});
 }
 function updateBoss(b, dt) {
   if (b.dead) return;
@@ -1944,18 +2028,43 @@ function updateBoss(b, dt) {
   const dx = CXx(t) - CXx(b);
   const dist = distC(b, t);
   b.facing = Math.sign(dx) || b.facing;
+  if (b.tellT > 0) {
+    b.tellT -= dt;
+    b.vx = 0;
+    b.facing = b.tellFace || b.facing;
+    if (b.tellT <= 0) {
+      const act = b.tell;
+      const dur = b.tellDur || 0.2;
+      b.tell = '';
+      b.tellT = 0;
+      if (act === 'blink') bossReleaseBlink(b);
+      else if (act === 'spit' || act === 'bolt' || act === 'spear' || act === 'shade') bossReleaseShot(b, act);
+      else bossStart(b, act, dur);
+    }
+    moveBody(b, dt);
+    bossLand(b, air);
+    return;
+  }
   if (b.actT > 0) {
     b.actT -= dt;
-    if (b.act === 'flop' && b.actT < 0.34 && b.actT > 0.2) bossBlow(b, 2.3, 5, {slow:0.62, slowT:2.4, kb:8});
-    else if (b.act === 'cleave' && b.actT < 0.32 && b.actT > 0.16) bossBlow(b, 1.9, 7, {stop:1.4, kb:8});
-    else if (b.act === 'poke') {
+    if (b.act === 'flop' && b.actT < 0.34 && b.actT > 0.2) {
+      if (!b._flared) { b._flared = 1; bossSpark(b, 'flop'); }
+      bossBlow(b, 2.3, 5, {slow:0.62, slowT:2.4, kb:8});
+    } else if (b.act === 'cleave' && b.actT < 0.32 && b.actT > 0.16) {
+      if (!b._flared) { b._flared = 1; bossSpark(b, 'cleave'); }
+      bossBlow(b, 1.9, 7, {stop:1.4, kb:8});
+    } else if (b.act === 'poke') {
       const step = b.actT > 0.34 ? 0 : b.actT > 0.22 ? 1 : b.actT > 0.1 ? 2 : 3;
-      if ((b.pokes || 0) < step) { b._hit = {}; b.pokes = step; bossBlow(b, 1.35, 3, {kb:4}); }
-    } else if (b.act === 'sweep' && b.actT < 0.3 && b.actT > 0.12) bossBlow(b, 2.5, 6, {blind:2.5, kb:6});
-    else if (b.act === 'rush' || b.act === 'lance') {
+      if ((b.pokes || 0) < step) { b._hit = {}; b.pokes = step; bossSpark(b, 'poke'); bossBlow(b, 1.35, 3, {kb:4}); }
+    } else if (b.act === 'sweep' && b.actT < 0.3 && b.actT > 0.12) {
+      if (!b._flared) { b._flared = 1; bossSpark(b, 'sweep'); }
+      bossBlow(b, 2.5, 6, {blind:2.5, kb:6});
+    } else if (b.act === 'rush' || b.act === 'lance') {
       const spd = b.act === 'lance' ? 12 : (b.sub === 'dark' ? 8 : 7);
       b.vx = b.facing * spd;
       b.chargeLeft -= spd * dt;
+      b._trail = (b._trail || 0) - dt;
+      if (b._trail <= 0) { b._trail = 0.05; bossSpark(b, b.act); }
       bossBlow(b, b.act === 'lance' ? 1.15 : 1.35, b.act === 'lance' ? 4 : 6, {kb:9});
       if (b.chargeLeft <= 0 || b.wall) b.actT = 0;
     } else b.vx = 0;
@@ -1968,39 +2077,24 @@ function updateBoss(b, dt) {
   if (b.sub === 'slime') {
     b.hop = Math.max(0, (b.hop || 0) - dt);
     if (b.onGround && b.hop <= 0 && dist > 3.4) { b.vy = 8.2; b.hop = 1.25; }
-    if (dist < 2.6) bossStart(b, 'flop', 0.62);
-    else if (b.cd <= 0) {
-      bossArc(b, CXx(b), b.y + 1.2, [-0.45, 0, 0.45], 9, 3, {grav:12, r:0.32, type:'goo', slow:0.72, slowT:2});
-      b.cd = 1.7; bossStart(b, 'spit', 0.28);
-    }
+    if (dist < 2.6) bossTell(b, 'flop', 0.45, 0.62);
+    else if (b.cd <= 0) bossTell(b, 'spit', 0.36, 0.26, 1.7);
   } else if (b.sub === 'dark') {
-    if (dist < 2.8) bossStart(b, 'cleave', 0.58);
-    else if (dist < 9 && b.cd <= 0) { b.chargeLeft = 6.5; b.cd = 2.4; bossStart(b, 'rush', 0.95); }
-    else if (b.cd <= 0.4) {
-      bossArc(b, CXx(b) + b.facing * 0.6, b.y + 1.4, [0], 10, 5, {r:0.42, life:1.5});
-      b.cd = 1.8;
-    }
+    if (dist < 2.8) bossTell(b, 'cleave', 0.42, 0.58);
+    else if (dist < 9 && b.cd <= 0) { b.chargeLeft = 6.5; bossTell(b, 'rush', 0.4, 0.95, 2.4); }
+    else if (b.cd <= 0) bossTell(b, 'bolt', 0.34, 0.26, 1.8);
   } else if (b.sub === 'white') {
-    if (dist < 2.3) bossStart(b, 'poke', 0.5);
-    else if (dist < 7 && b.cd <= 0) { b.chargeLeft = 4.2; b.cd = 1.5; bossStart(b, 'lance', 0.42); }
-    else if (b.cd <= 0) {
-      bossArc(b, CXx(b) + b.facing * 0.7, b.y + 1.25, [0], 18, 6, {r:0.12, life:1.1});
-      b.cd = 1.15;
-    }
+    if (dist < 2.3) bossTell(b, 'poke', 0.28, 0.5);
+    else if (dist < 7 && b.cd <= 0) { b.chargeLeft = 4.2; bossTell(b, 'lance', 0.26, 0.42, 1.5); }
+    else if (b.cd <= 0) bossTell(b, 'spear', 0.24, 0.2, 1.15);
   } else {
     if (b.blink <= 0 && dist > 2.4) {
       const nx = clamp(t.x - (t.facing || 1) * 1.5, 0.4, BW - b.w - 0.4);
       const ny = Math.max(1, t.y);
-      if (!inSolid(nx, ny, b.w, b.h)) {
-        fx.push({x:CXx(b), y:CYy(b), r:0.8, life:0.16, max:0.16, color:'#5c4a78'});
-        b.x = nx; b.y = ny; b.vx = 0; b.vy = 0; b.blink = 3.4; b.iframe = 0.25;
-        fx.push({x:CXx(b), y:CYy(b), r:0.8, life:0.16, max:0.16, color:'#eceae4'});
-      } else b.blink = 0.4;
-    } else if (dist < 2.7) bossStart(b, 'sweep', 0.5);
-    else if (b.cd <= 0) {
-      bossArc(b, CXx(b), b.y + 1.3, [-0.18, 0.18], 12, 4, {homing:1.6, life:1.8, r:0.18});
-      b.cd = 1.35;
-    }
+      if (!inSolid(nx, ny, b.w, b.h)) { b.markX = nx; b.markY = ny; b.blink = 3.8; bossTell(b, 'blink', 0.4, 0.35); }
+      else b.blink = 0.4;
+    } else if (dist < 2.7) bossTell(b, 'sweep', 0.4, 0.5);
+    else if (b.cd <= 0) bossTell(b, 'shade', 0.3, 0.24, 1.35);
   }
   moveBody(b, dt);
   bossLand(b, air);
@@ -2099,6 +2193,7 @@ function updateProj(p, dt) {
       }
       hurt(o, p.dmg, {src:byId(p.owner), hid:'p' + p.id + ':' + o.id, kb:p.type === 'orb' ? 4 : 2, meter:p.meter !== 0});
       if (p.slow) applySlow(o, p.slow, p.slowT || 2);
+      if (p.bossFx) bossRing(p.x, p.y, 0.85, 0.18, p.bossFx);
       if (!p.pierce) { p.life = 0; return; }
       p.hit[o.id] = 1;
     }
@@ -3242,6 +3337,25 @@ function drawProj(p, cam) {
     ctx.fill();
     return;
   }
+  if (p.bossFx) {
+    const r = Math.max(4, (p.r || 0.2) * cam.z);
+    const tail = w2s(p.x - (p.vx || 0) * 0.06, p.y - (p.vy || 0) * 0.06, cam);
+    ctx.strokeStyle = p.bossFx;
+    ctx.lineWidth = Math.max(3, r);
+    ctx.beginPath();
+    ctx.moveTo(tail.x, tail.y);
+    ctx.lineTo(s.x, s.y);
+    ctx.stroke();
+    ctx.fillStyle = p.bossFx;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, r * (p.type === 'goo' ? 1.6 : 1.15), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, Math.max(2, r * 0.35), 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
   ctx.fillStyle = p.type === 'goo' ? '#8ee86a' : p.type === 'orb' ? '#d6ff7a' : p.type === 'soul' ? '#e6d2ff' : p.type === 'square' ? '#9db0ff' : p.type === 'grenade' ? '#6d7cff' : p.type === 'arrow' ? '#f4e2b0' : p.type === 'sword' ? '#d9dde8' : p.type === 'star' ? '#ffe14a' : '#9aefff';
   const r = Math.max(3, (p.r || 0.2) * cam.z);
   ctx.beginPath();
@@ -3825,6 +3939,75 @@ function drawObjectiveHud() {
     if (game.ball && game.ball.holder && !game.ball.holder.ai && game.ball.holder.owner === myId) text('F  던지기', W / 2, H - 46, 14, '#eceae4', 'center');
   }
 }
+function drawBossTell(cam) {
+  if (!game || game.mode !== 'boss') return;
+  for (const b of bosses) {
+    if (b.dead || !(b.tellT > 0)) continue;
+    const col = b.color || '#eceae4';
+    const pulse = 0.55 + 0.45 * Math.abs(Math.sin(T * 16));
+    ctx.save();
+    ctx.fillStyle = col;
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    const hx = CXx(b) + (b.facing || 1) * 0.7;
+    const hy = b.y + b.h * 0.45;
+    const disc = (x, y, r) => {
+      const p = w2s(x, y, cam);
+      const rad = r * cam.z * (0.84 + 0.16 * pulse);
+      ctx.globalAlpha = 0.2 + 0.12 * pulse;
+      ctx.beginPath(); ctx.arc(p.x, p.y, rad, 0, 7); ctx.fill();
+      ctx.globalAlpha = 0.95;
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(p.x, p.y, rad, 0, 7); ctx.stroke();
+      ctx.globalAlpha = 0.55;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(p.x, p.y, rad * 0.62, 0, 7); ctx.stroke();
+    };
+    if (b.tell === 'flop') disc(hx, b.y + 0.3, 2.3);
+    else if (b.tell === 'cleave') disc(hx, hy, 1.9);
+    else if (b.tell === 'poke') disc(hx, hy, 1.35);
+    else if (b.tell === 'sweep') disc(hx, hy, 2.5);
+    else if (b.tell === 'rush' || b.tell === 'lance') {
+      const a = w2s(CXx(b), hy, cam);
+      const c = w2s(CXx(b) + b.facing * (b.chargeLeft || 4), hy, cam);
+      ctx.globalAlpha = 0.35;
+      ctx.lineWidth = 14;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(c.x, c.y); ctx.stroke();
+      ctx.globalAlpha = 0.9;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(c.x, c.y, 16, 0, 7); ctx.stroke();
+    } else if (b.tell === 'blink') disc(b.markX + b.w * 0.5, b.markY + b.h * 0.45, 1.05);
+    else {
+      const ox = CXx(b) + b.facing * 0.5;
+      const oy = b.y + b.h * 0.55;
+      const spread = b.tell === 'spit' ? [-0.45, 0, 0.45] : b.tell === 'shade' ? [-0.18, 0.18] : [0];
+      const len = b.tell === 'spear' ? 4.6 : 3.2;
+      ctx.globalAlpha = 0.85;
+      ctx.lineWidth = b.tell === 'spear' ? 2 : 4;
+      for (let i = 0; i < spread.length; i++) {
+        const a = (b.aimA || 0) + spread[i];
+        const p = w2s(ox, oy, cam);
+        const q = w2s(ox + Math.cos(a) * len, oy + Math.sin(a) * len, cam);
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+}
+function drawBossCall(cam) {
+  if (!game || game.mode !== 'boss') return;
+  for (const b of bosses) {
+    if (b.dead) continue;
+    const act = b.tellT > 0 ? b.tell : (b.actT > 0 ? b.act : '');
+    const name = BOSS_SAY[act];
+    if (!name) continue;
+    const p = w2s(CXx(b), b.y + b.h + 0.8, cam);
+    text(name, p.x, p.y, 18, '#eceae4', 'center');
+    ctx.fillStyle = b.color || '#e23b3b';
+    ctx.fillRect(p.x - 18, p.y + 22, 36, 2);
+  }
+}
 function renderBattle() {
   const cam = camera();
   ctx.save();
@@ -3854,6 +4037,7 @@ function renderBattle() {
     ctx.stroke();
     ctx.globalAlpha = 1;
   }
+  drawBossTell(cam);
   for (const e of [...mobs, ...bosses, ...fighters]) drawActor(e, cam);
   drawSums(cam);
   drawChains(cam);
@@ -3864,6 +4048,7 @@ function renderBattle() {
     text(n.text, p.x, p.y, 16, n.color, 'center');
     ctx.globalAlpha = 1;
   }
+  drawBossCall(cam);
   ctx.restore();
   drawVision(cam);
   drawObjectives(cam);
