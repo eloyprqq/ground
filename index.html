@@ -757,7 +757,7 @@ function kill(t) {
     }
     t.respawn = 3;
   }
-  if (t.kind === 'fighter' && game && game.mode === 'boss') t.respawn = 10;
+  if (t.kind === 'fighter' && game && game.mode === 'boss') t.respawn = 6;
   if (t.kind === 'mob') {
     if (game && game.mode === 'raid' && !t.counted) { t.counted = true; game.killed++; }
     const src = t.lastSrc;
@@ -4328,7 +4328,7 @@ function frameMenu() {
       ['회복', '3초 동안 안 싸우면 천천히'],
       ['시야', '7칸 밖은 안 보임'],
       ['잡몹', '대전에서만. 잡으면 이속, 회복, 추가 체력'],
-      ['보스', '3대1. 아군이 있으면 10초 뒤 부활. 전멸하면 패배'],
+      ['보스', '3대1. 아군이 있으면 6초 뒤 부활. 전멸하면 패배'],
       ['2P', '방향키, 위 점프, K 좌클릭, L 우클릭'],
       ['잼 그랩', '3대3. 보석 8개면 카운트. 사람 대전 방과 매칭도 됨'],
       ['배스킷 볼', '3대3. 5점. 골 뒤 2초 만에 스폰. 사람 대전에서도 F로 던짐'],
@@ -4514,7 +4514,7 @@ function frameMenu() {
   } else if (S.screen === 'bosses') {
     showName(false);
     text('보스', x, 88, 26, '#eceae4');
-    text('3대1. 아군이 살아 있으면 10초 뒤 옆에서 돌아옵니다. 전멸하면 패배.', x, 126, 14, '#8d8a82');
+    text('3대1. 아군이 살아 있으면 6초 뒤 옆에서 돌아옵니다. 전멸하면 패배.', x, 126, 14, '#8d8a82');
     [['slime', '슬라임  64'], ['white', '백색기사  56'], ['dark', '암흑 기사  88'], ['shade', '그림자의 왕  110']].forEach((row, i) => {
       button(x, 168 + i * 48, 280, 40, row[1], () => startBoss(S.me, row[0]));
     });
