@@ -45,39 +45,43 @@ function audio() {
   return actx;
 }
 function tone(freq, dur, type, gain, slide, delay) {
-  const a = audio();
-  if (!a) return;
-  const t = a.currentTime + (delay || 0);
-  const o = a.createOscillator();
-  const g = a.createGain();
-  o.type = type || 'sine';
-  o.frequency.setValueAtTime(Math.max(40, freq), t);
-  if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(40, slide), t + dur);
-  g.gain.setValueAtTime(gain, t);
-  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  o.connect(g); g.connect(a.destination);
-  o.start(t); o.stop(t + dur + 0.02);
+  try {
+    const a = audio();
+    if (!a || !(gain > 0) || !(dur > 0)) return;
+    const t = a.currentTime + (delay || 0);
+    const o = a.createOscillator();
+    const g = a.createGain();
+    o.type = type || 'sine';
+    o.frequency.setValueAtTime(Math.max(40, freq), t);
+    if (slide > 0) o.frequency.exponentialRampToValueAtTime(Math.max(40, slide), t + dur);
+    g.gain.setValueAtTime(gain, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(g); g.connect(a.destination);
+    o.start(t); o.stop(t + dur + 0.02);
+  } catch (e) {}
 }
 function burst(dur, gain, freq) {
-  const a = audio();
-  if (!a) return;
-  if (!noiseBuf) {
-    noiseBuf = a.createBuffer(1, Math.floor(a.sampleRate * 0.25), a.sampleRate);
-    const d = noiseBuf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-  }
-  const src = a.createBufferSource();
-  src.buffer = noiseBuf;
-  const f = a.createBiquadFilter();
-  f.type = 'bandpass';
-  f.frequency.value = freq || 900;
-  f.Q.value = 0.7;
-  const g = a.createGain();
-  const t = a.currentTime;
-  g.gain.setValueAtTime(gain, t);
-  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  src.connect(f); f.connect(g); g.connect(a.destination);
-  src.start(t); src.stop(t + dur + 0.02);
+  try {
+    const a = audio();
+    if (!a || !(gain > 0) || !(dur > 0)) return;
+    if (!noiseBuf) {
+      noiseBuf = a.createBuffer(1, Math.floor(a.sampleRate * 0.25), a.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    const src = a.createBufferSource();
+    src.buffer = noiseBuf;
+    const f = a.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.value = freq || 900;
+    f.Q.value = 0.7;
+    const g = a.createGain();
+    const t = a.currentTime;
+    g.gain.setValueAtTime(gain, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    src.connect(f); f.connect(g); g.connect(a.destination);
+    src.start(t); src.stop(t + dur + 0.02);
+  } catch (e) {}
 }
 let sound = localStorage.getItem('ground-sound') !== '0';
 const music = {mode:'', next:0, step:0, nodes:[]};
@@ -97,28 +101,30 @@ function sfx(name) {
   else if (name === 'heal') { tone(392, 0.1, 'sine', 0.04, 520); tone(523, 0.14, 'sine', 0.035, 0, 0.06); }
   else if (name === 'throw') tone(300, 0.08, 'sine', 0.03, 160);
   else if (name === 'catch') tone(520, 0.04, 'sine', 0.028);
-  else if (name === 'ko') tone(110, 0.18, 'sine', 0.05, 48);
-  else if (name === 'goal') { tone(392, 0.12, 'sine', 0.05, 523); tone(659, 0.22, 'sine', 0.04, 0, 0.1); }
-  else if (name === 'win') { tone(392, 0.12, 'sine', 0.045); tone(494, 0.14, 'sine', 0.04, 0, 0.1); tone(587, 0.24, 'sine', 0.04, 0, 0.2); }
-  else if (name === 'lose') { tone(220, 0.16, 'sine', 0.04, 110); tone(164.81, 0.24, 'sine', 0.035, 0, 0.12); }
+  else if (name === 'ko') { burst(0.08, 0.08, 180); tone(196, 0.22, 'sine', 0.1, 70); }
+  else if (name === 'goal') { burst(0.1, 0.1, 1200); tone(523, 0.2, 'sine', 0.16, 784); tone(784, 0.36, 'triangle', 0.12, 1046, 0.12); }
+  else if (name === 'win') { tone(392, 0.16, 'sine', 0.1); tone(523, 0.18, 'sine', 0.09, 659, 0.12); tone(784, 0.32, 'sine', 0.08, 988, 0.26); }
+  else if (name === 'lose') { tone(220, 0.2, 'sine', 0.09, 110); tone(146.83, 0.32, 'sine', 0.07, 90, 0.14); }
   else if (name === 'shot') tone(740, 0.03, 'triangle', 0.02, 420);
   else if (name === 'ready') { tone(523, 0.06, 'sine', 0.03); tone(784, 0.1, 'sine', 0.028, 0, 0.05); }
   else if (name === 'back') tone(294, 0.1, 'sine', 0.035, 440);
   else if (name === 'gem') tone(880, 0.05, 'sine', 0.03, 1170);
 }
 function pad(freq, dur, gain, delay) {
-  const a = audio();
-  if (!a) return;
-  const t = a.currentTime + (delay || 0);
-  const o = a.createOscillator();
-  const g = a.createGain();
-  o.type = 'sine';
-  o.frequency.value = Math.max(40, freq);
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(gain, t + 0.9);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  o.connect(g); g.connect(a.destination);
-  o.start(t); o.stop(t + dur + 0.05);
+  try {
+    const a = audio();
+    if (!a || !(gain > 0) || !(dur > 0.2)) return;
+    const t = a.currentTime + (delay || 0);
+    const o = a.createOscillator();
+    const g = a.createGain();
+    o.type = 'sine';
+    o.frequency.value = Math.max(40, freq);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t + 0.9);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(a.destination);
+    o.start(t); o.stop(t + dur + 0.05);
+  } catch (e) {}
 }
 function stopMusic() {
   for (const n of music.nodes) { try { n.stop(); } catch (e) {} }
@@ -143,7 +149,7 @@ function tickMusic() {
     music.step = 0;
     music.next = actx.currentTime + 0.06;
     const root = mode === 'battle' ? 49 : 55;
-    for (const [freq, gain] of [[root, 0.011], [root * 1.5, 0.0045]]) {
+    for (const [freq, gain] of [[root, 0.02], [root * 1.5, 0.008]]) {
       const o = actx.createOscillator();
       const g = actx.createGain();
       o.type = 'sine';
@@ -162,8 +168,8 @@ function tickMusic() {
   while (music.next < now + 0.4) {
     const delay = Math.max(0, music.next - now);
     const f = phrase[music.step % phrase.length];
-    pad(f, dur, 0.011, delay);
-    pad(f * 2, dur, 0.0035, delay);
+    pad(f, dur, 0.018, delay);
+    pad(f * 2, dur, 0.006, delay);
     music.step++;
     music.next += gap;
   }
@@ -404,7 +410,7 @@ function trade(coinToPp) {
 }
 function playerWon() {
   if (!game || game.winTeam == null || game.winTeam < 0) return false;
-  if (game.mode === 'raid') return game.winTeam === 0;
+  if (game.mode === 'raid' || game.mode === 'boss') return game.winTeam === 0;
   const mine = myFighter();
   return !!(mine && mine.team === game.winTeam);
 }
@@ -451,7 +457,7 @@ function menuPress(e, p) {
   } else if (e.button === 0) pointer.click = p;
 }
 canvas.addEventListener('pointerdown', e => {
-  audio();
+  try { audio(); } catch (err) {}
   if (S.screen === 'join') nameEl.blur();
   lastPtr = performance.now();
   const p = screenPos(e); pointer.x = p.x; pointer.y = p.y; mouse.x = p.x; mouse.y = p.y;
@@ -620,14 +626,20 @@ function makeMob(sub, x, y, tint) {
     cd:0, fused:0, exploded:false, counted:false, lastSrc:null, dashT:0, pullT:0, jumps:0
   };
 }
+const BOSS = {
+  slime:{name:'슬라임', hp:64, w:2.6, h:2.1, color:'#7dcea0'},
+  dark:{name:'암흑 기사', hp:88, w:1.25, h:2.45, color:'#6a6478'},
+  white:{name:'백색기사', hp:56, w:1.15, h:2.35, color:'#e6e2d6'},
+  shade:{name:'그림자의 왕', hp:110, w:1.35, h:2.6, color:'#5c4a78'}
+};
 function makeBoss(which) {
-  const slime = which === 'slime';
+  const spec = BOSS[which] || BOSS.slime;
   return {
-    id:++NID, kind:'boss', sub:which, team:2, name:slime ? '대왕 슬라임' : '흑기사장',
-    x:BW / 2 - 1.2, y:1, w:slime ? 2.55 : 1.2, h:slime ? 2.05 : 2.4,
-    vx:0, vy:0, hp:40, maxHp:40, bonus:0, facing:-1, onGround:true, wall:0,
-    dead:false, flash:0, iframe:0, cd:0, act:null, actT:0, hid:0, chargeLeft:0,
-    dashT:0, pullT:0, jumps:0, lastSrc:null
+    id:++NID, kind:'boss', sub:spec === BOSS[which] ? which : 'slime', team:2, name:spec.name,
+    x:BW - 8, y:1, w:spec.w, h:spec.h,
+    vx:0, vy:0, hp:spec.hp, maxHp:spec.hp, bonus:0, facing:-1, onGround:true, wall:0,
+    dead:false, flash:0, iframe:0, cd:0.8, act:null, actT:0, hid:0, chargeLeft:0,
+    dashT:0, pullT:0, jumps:0, lastSrc:null, blink:1.4, color:spec.color
   };
 }
 
@@ -745,6 +757,7 @@ function kill(t) {
     }
     t.respawn = 3;
   }
+  if (t.kind === 'fighter' && game && game.mode === 'boss') t.respawn = 10;
   if (t.kind === 'mob') {
     if (game && game.mode === 'raid' && !t.counted) { t.counted = true; game.killed++; }
     const src = t.lastSrc;
@@ -1877,54 +1890,120 @@ function updateMob(m, dt) {
   moveBody(m, dt);
 }
 
+function bossFoes(b) { return enemiesOf(b).filter(o => o.kind === 'fighter'); }
+function bossAim(b) {
+  const list = bossFoes(b);
+  if (!list.length) return null;
+  list.sort((a, c) => distC(b, a) - distC(b, c));
+  return list[0];
+}
+function bossStart(b, act, time) {
+  b.act = act; b.actT = time; b.hid = act + (++NID); b._hit = {}; b.pokes = 0;
+  sfx('slam');
+}
+function bossArc(b, ox, oy, spread, speed, dmg, extra) {
+  const t = bossAim(b);
+  const base = t ? Math.atan2((t.y + 0.8) - oy, CXx(t) - ox) : (b.facing < 0 ? Math.PI : 0);
+  for (let i = 0; i < spread.length; i++) {
+    const a = base + spread[i];
+    spawnProj(Object.assign({
+      type:'bolt', x:ox, y:oy, vx:Math.cos(a) * speed, vy:Math.sin(a) * speed,
+      r:0.24, dmg, life:1.5, team:b.team, owner:b.id, grav:0
+    }, extra || {}));
+  }
+}
+function bossBlow(b, r, dmg, opt) {
+  const hx = CXx(b) + b.facing * r * 0.35;
+  const hy = b.y + b.h * 0.45;
+  for (const f of bossFoes(b)) {
+    if (b._hit[f.id]) continue;
+    if (Math.hypot(CXx(f) - hx, CYy(f) - hy) > r) continue;
+    b._hit[f.id] = 1;
+    hurt(f, dmg, Object.assign({src:b, hid:b.hid + ':' + f.id, kb:7}, opt || {}));
+    if (opt && opt.stop) { f.stopT = Math.max(f.stopT || 0, opt.stop); f.vx = 0; f.vy = 0; }
+    if (opt && opt.slow) applySlow(f, opt.slow, opt.slowT || 2);
+    if (opt && opt.blind) f.blindT = Math.max(f.blindT || 0, opt.blind);
+  }
+}
+function bossLand(b, air) {
+  if (b.sub !== 'slime' || !air || !b.onGround) return;
+  const keep = b._hit;
+  b._hit = {};
+  bossBlow(b, 2.2, 0, {slow:0.68, slowT:1.8});
+  b._hit = keep;
+}
 function updateBoss(b, dt) {
   if (b.dead) return;
+  const air = !b.onGround;
   b.iframe = Math.max(0, b.iframe - dt);
   b.flash = Math.max(0, b.flash - dt);
   b.cd = Math.max(0, b.cd - dt);
-  const slime = b.sub === 'slime';
-  const t = nearestEnemy(b);
-  if (!t) { b.vx = 0; moveBody(b, dt); return; }
-  const dx = CXx(t) - CXx(b), dist = distC(b, t);
+  b.blink = Math.max(0, (b.blink || 0) - dt);
+  const t = bossAim(b);
+  if (!t) { b.vx = 0; moveBody(b, dt); bossLand(b, air); return; }
+  const dx = CXx(t) - CXx(b);
+  const dist = distC(b, t);
   b.facing = Math.sign(dx) || b.facing;
   if (b.actT > 0) {
     b.actT -= dt;
-    if (b.act === 'swing') {
-      b.vx = 0;
-      if (b.actT < 0.38 && b.actT > 0.16) {
-        const hx = CXx(b) + b.facing * (slime ? 1.55 : 1.35);
-        const hy = b.y + (slime ? 1.1 : 1.3);
-        for (const f of enemiesOf(b)) {
-          if (Math.hypot(CXx(f) - hx, CYy(f) - hy) < (slime ? 1.25 : 1.15)) hurt(f, slime ? 4 : 5, {src:b, hid:b.hid, kb:7});
-        }
-      }
-    } else if (b.act === 'charge') {
-      const spd = (slime ? 2.5 : 3.3) * (slime ? 1.2 : 1.35);
+    if (b.act === 'flop' && b.actT < 0.34 && b.actT > 0.2) bossBlow(b, 2.3, 5, {slow:0.62, slowT:2.4, kb:8});
+    else if (b.act === 'cleave' && b.actT < 0.32 && b.actT > 0.16) bossBlow(b, 1.9, 7, {stop:1.4, kb:8});
+    else if (b.act === 'poke') {
+      const step = b.actT > 0.34 ? 0 : b.actT > 0.22 ? 1 : b.actT > 0.1 ? 2 : 3;
+      if ((b.pokes || 0) < step) { b._hit = {}; b.pokes = step; bossBlow(b, 1.35, 3, {kb:4}); }
+    } else if (b.act === 'sweep' && b.actT < 0.3 && b.actT > 0.12) bossBlow(b, 2.5, 6, {blind:2.5, kb:6});
+    else if (b.act === 'rush' || b.act === 'lance') {
+      const spd = b.act === 'lance' ? 12 : (b.sub === 'dark' ? 8 : 7);
       b.vx = b.facing * spd;
       b.chargeLeft -= spd * dt;
-      for (const f of enemiesOf(b)) {
-        if (Math.abs(CXx(f) - CXx(b)) < b.w * 0.7 && Math.abs(CYy(f) - CYy(b)) < 1.4) hurt(f, slime ? 5 : 4, {src:b, hid:b.hid, kb:9});
-      }
+      bossBlow(b, b.act === 'lance' ? 1.15 : 1.35, b.act === 'lance' ? 4 : 6, {kb:9});
       if (b.chargeLeft <= 0 || b.wall) b.actT = 0;
     } else b.vx = 0;
-    if (b.actT <= 0) b.act = null;
+    if (b.actT <= 0) { b.act = null; b.vx = 0; }
     moveBody(b, dt);
+    bossLand(b, air);
     return;
   }
-  b.vx = 0;
-  if (dist <= 3) { b.act = 'swing'; b.actT = slime ? 0.52 : 0.48; b.hid = 'sw' + (++NID); }
-  else if (dist <= 5) { b.act = 'charge'; b.actT = 1.1; b.chargeLeft = slime ? 3 : 4; b.hid = 'ch' + (++NID); }
-  else if (dist <= 7) {
-    if (b.cd <= 0) {
-      const ax = CXx(t) - CXx(b), ay = CYy(t) - (b.y + 1.2);
-      const len = Math.hypot(ax, ay) || 1;
-      if (slime) spawnProj({type:'goo', x:CXx(b) + b.facing * 0.8, y:b.y + 1.2, vx:ax / len * 11, vy:ay / len * 11, r:0.28, dmg:3, life:1.7, team:2, owner:b.id, pierce:true, grav:0});
-      else spawnProj({type:'sword', x:CXx(b) + b.facing * 0.7, y:b.y + 1.35, vx:ax / len * 12, vy:ay / len * 12, r:0.22, dmg:4, life:1.3, team:2, owner:b.id, grav:0});
-      b.cd = slime ? 0.5 : 0.7;
-      b.act = 'shoot'; b.actT = 0.28;
-    } else b.vx = Math.sign(dx) * (slime ? 1.6 : 2.2);
-  } else b.vx = Math.sign(dx) * (slime ? 2.3 : 3.1);
+  b.vx = Math.sign(dx) * (b.sub === 'white' ? 3.6 : b.sub === 'shade' ? 2.8 : b.sub === 'dark' ? 1.8 : 2.2);
+  if (b.sub === 'slime') {
+    b.hop = Math.max(0, (b.hop || 0) - dt);
+    if (b.onGround && b.hop <= 0 && dist > 3.4) { b.vy = 8.2; b.hop = 1.25; }
+    if (dist < 2.6) bossStart(b, 'flop', 0.62);
+    else if (b.cd <= 0) {
+      bossArc(b, CXx(b), b.y + 1.2, [-0.45, 0, 0.45], 9, 3, {grav:12, r:0.32, type:'goo', slow:0.72, slowT:2});
+      b.cd = 1.7; bossStart(b, 'spit', 0.28);
+    }
+  } else if (b.sub === 'dark') {
+    if (dist < 2.8) bossStart(b, 'cleave', 0.58);
+    else if (dist < 9 && b.cd <= 0) { b.chargeLeft = 6.5; b.cd = 2.4; bossStart(b, 'rush', 0.95); }
+    else if (b.cd <= 0.4) {
+      bossArc(b, CXx(b) + b.facing * 0.6, b.y + 1.4, [0], 10, 5, {r:0.42, life:1.5});
+      b.cd = 1.8;
+    }
+  } else if (b.sub === 'white') {
+    if (dist < 2.3) bossStart(b, 'poke', 0.5);
+    else if (dist < 7 && b.cd <= 0) { b.chargeLeft = 4.2; b.cd = 1.5; bossStart(b, 'lance', 0.42); }
+    else if (b.cd <= 0) {
+      bossArc(b, CXx(b) + b.facing * 0.7, b.y + 1.25, [0], 18, 6, {r:0.12, life:1.1});
+      b.cd = 1.15;
+    }
+  } else {
+    if (b.blink <= 0 && dist > 2.4) {
+      const nx = clamp(t.x - (t.facing || 1) * 1.5, 0.4, BW - b.w - 0.4);
+      const ny = Math.max(1, t.y);
+      if (!inSolid(nx, ny, b.w, b.h)) {
+        fx.push({x:CXx(b), y:CYy(b), r:0.8, life:0.16, max:0.16, color:'#5c4a78'});
+        b.x = nx; b.y = ny; b.vx = 0; b.vy = 0; b.blink = 3.4; b.iframe = 0.25;
+        fx.push({x:CXx(b), y:CYy(b), r:0.8, life:0.16, max:0.16, color:'#eceae4'});
+      } else b.blink = 0.4;
+    } else if (dist < 2.7) bossStart(b, 'sweep', 0.5);
+    else if (b.cd <= 0) {
+      bossArc(b, CXx(b), b.y + 1.3, [-0.18, 0.18], 12, 4, {homing:1.6, life:1.8, r:0.18});
+      b.cd = 1.35;
+    }
+  }
   moveBody(b, dt);
+  bossLand(b, air);
 }
 
 function updateProj(p, dt) {
@@ -2019,6 +2098,7 @@ function updateProj(p, dt) {
         p.life = 0; return;
       }
       hurt(o, p.dmg, {src:byId(p.owner), hid:'p' + p.id + ':' + o.id, kb:p.type === 'orb' ? 4 : 2, meter:p.meter !== 0});
+      if (p.slow) applySlow(o, p.slow, p.slowT || 2);
       if (!p.pierce) { p.life = 0; return; }
       p.hit[o.id] = 1;
     }
@@ -2200,6 +2280,35 @@ function dropGems(t) {
     });
   }
 }
+function startBoss(char, which) {
+  resetWorld();
+  const pool = CHARS.map(c => c.id).filter(id => id !== char);
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const swap = pool[i]; pool[i] = pool[j]; pool[j] = swap;
+  }
+  const make = (id, x, slot, ai) => {
+    const f = makeFighter(id, x, 0, ai ? charOf(id).name : myName());
+    f.slot = slot;
+    f.ai = ai;
+    f.gadLv = ai ? 12 : (acct.rise[id] || 0);
+    f.gadLeft = 3;
+    return f;
+  };
+  fighters = [
+    make(char || 'charger', 4.6, 0, false),
+    make(pool[0] || 'chainer', 8, 1, true),
+    make(pool[1] || 'shifter', 11.4, 2, true)
+  ];
+  bosses = [makeBoss(which)];
+  game = {
+    mode:'boss', which:bosses[0].sub, stage:0, rules:{adds:false, rewards:true},
+    over:false, winTeam:null, bossing:true, addT:99, local2p:false,
+    setup:{type:'boss', char:char || 'charger', which:bosses[0].sub}
+  };
+  net.myTeam = 0;
+  S.screen = 'battle'; S.pause = false; nameEl.blur();
+}
 function reviveFighter(f) {
   f.dead = false;
   f.hp = f.maxHp;
@@ -2208,8 +2317,17 @@ function reviveFighter(f) {
   f.vy = 0;
   f.x = teamSpawnX(f.team, f.slot || 0, 3);
   f.y = 1;
+  if (game && game.mode === 'boss') {
+    const mates = fighters.filter(o => o !== f && !o.dead && o.team === f.team);
+    if (mates.length) {
+      const ally = mates[Math.floor(Math.random() * mates.length)];
+      f.x = clamp(ally.x - (ally.facing || 1) * 1.4, 0.4, BW - f.w - 0.4);
+      f.y = Math.max(1, ally.y);
+    }
+    f.iframe = 1.4;
+  }
   f.gems = 0;
-  f.iframe = 1.1;
+  if (!(game && game.mode === 'boss')) f.iframe = 1.1;
   f.flash = 0;
   f.respawn = 0;
   f.holdL = 0;
@@ -2231,7 +2349,7 @@ function reviveFighter(f) {
   if (heard(f)) sfx('back');
 }
 function tickRespawn(dt) {
-  if (!game || (game.mode !== 'gem' && game.mode !== 'ball' && game.mode !== 'hill')) return;
+  if (!game || (game.mode !== 'gem' && game.mode !== 'ball' && game.mode !== 'hill' && game.mode !== 'boss')) return;
   for (const f of fighters) {
     if (!f.dead || !(f.respawn > 0)) continue;
     f.respawn -= dt;
@@ -2708,7 +2826,7 @@ function simulate(dt) {
     if (fighters.length >= 2 && aliveTeams.size <= 1) {
       game.over = true; game.winTeam = aliveTeams.size ? [...aliveTeams][0] : -1;
     }
-  } else if (game.mode !== 'gem' && game.mode !== 'ball' && game.mode !== 'hill' && fighters.every(f => f.dead)) { game.over = true; game.winTeam = -1; }
+  } else if (game.mode !== 'gem' && game.mode !== 'ball' && game.mode !== 'hill' && game.mode !== 'boss' && fighters.every(f => f.dead)) { game.over = true; game.winTeam = -1; }
   else if (game.bossing && bosses.length && bosses.every(b => b.dead)) { game.over = true; game.winTeam = 0; }
 }
 
@@ -2983,12 +3101,15 @@ function drawActor(e, cam) {
     ctx.fillStyle = '#f3eee6';
     ctx.beginPath(); ctx.arc(-pw * 0.16, -ph * 0.5, 3, 0, 7); ctx.arc(pw * 0.14, -ph * 0.5, 3, 0, 7); ctx.fill();
   } else if (e.kind === 'boss') {
-    ctx.fillStyle = e.flash > 0 ? '#fff' : '#141820';
+    const pale = e.sub === 'white';
+    const shade = e.sub === 'shade';
+    ctx.fillStyle = e.flash > 0 ? '#fff' : (pale ? '#d8d3c8' : shade ? '#16121c' : '#141820');
     ctx.fillRect(-pw * 0.42, -ph, pw * 0.84, ph);
-    ctx.fillStyle = '#9a3030';
+    ctx.strokeStyle = e.color || '#8d93a3';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(-pw * 0.42 + (shade ? 4 : 0), -ph, pw * 0.84, ph);
+    ctx.fillStyle = pale ? '#eceae4' : '#9a3030';
     ctx.fillRect(-pw * 0.18, -ph * 0.72, pw * 0.5, 3);
-    ctx.strokeStyle = '#cbb892'; ctx.lineWidth = 1.5;
-    ctx.strokeRect(-pw * 0.42, -ph, pw * 0.84, ph);
   } else if (e.kind === 'mob' && e.sub === 'pint') {
     ctx.fillStyle = e.fused > 0 && Math.sin(T * 28) > 0 ? '#f3eee6' : tint;
     ctx.beginPath(); ctx.arc(0, -ph * 0.45, pw * 0.48, 0, 7); ctx.fill();
@@ -3017,6 +3138,10 @@ function drawActor(e, cam) {
     ctx.beginPath(); ctx.moveTo(pw * 0.18, -ph * 0.62); ctx.lineTo(pw * 0.62, -ph * 0.78); ctx.stroke();
   }
   ctx.restore();
+  if (e.kind === 'fighter' && e.dead && e.respawn > 0) {
+    const mark = w2s(CXx(e), e.y + e.h + 0.55, cam);
+    text(String(Math.ceil(e.respawn)), mark.x, mark.y, 14, '#eceae4', 'center');
+  }
   drawTeamTag(e, cam);
   if (e.char === 'shifter' && !e.dead) {
     const n = e.clones || 1;
@@ -3313,19 +3438,15 @@ function drawHUD(cam) {
     if (game.mode === 'duel' && fighters.length > 2) text(fighters.length >= 6 ? '3대3' : '2대2', W / 2, 16, 15, '#eceae4', 'center');
   }
   drawObjectiveHud();
-  if (game && game.mode === 'raid') {
-    const label = (game.which === 'slime' ? '슬라임' : '기사단') + (game.bossing ? '  보스' : '  ' + game.stage);
-    const sub = game.bossing ? '' : (game.killed + ' / ' + game.quota);
-    text(label, W / 2, 16, 15, '#eceae4', 'center');
-    if (sub) text(sub, W / 2, 36, 13, '#8d8a82', 'center');
-    if (game.clearWait > 0) text('클리어', W / 2, 56, 15, '#eceae4', 'center');
-  }
-  if (game && game.bossing && bosses[0]) {
+  if (game && game.mode === 'boss' && bosses[0]) {
     const b = bosses[0];
-    const sc = 2;
-    const hw = heartsWidth(Math.ceil(b.maxHp / 2), sc);
-    text(b.name, W / 2, 58, 13, '#8d8a82', 'center');
-    drawHearts(W / 2 - hw / 2, 76, b.hp, b.maxHp, 0, sc);
+    text(b.name, W / 2, 16, 15, '#eceae4', 'center');
+    const bw = 280, bx = W / 2 - bw / 2, by = 38;
+    ctx.fillStyle = '#2c2f36';
+    ctx.fillRect(bx, by, bw, 8);
+    ctx.fillStyle = '#e23b3b';
+    ctx.fillRect(bx, by, bw * clamp(b.hp / Math.max(1, b.maxHp), 0, 1), 8);
+    text(Math.ceil(Math.max(0, b.hp)) + ' / ' + b.maxHp, W / 2, 54, 13, '#8d8a82', 'center');
   }
 }
 
@@ -3770,7 +3891,10 @@ function renderBattle() {
           const wnr = fighters.find(f => f.team === game.winTeam);
           title = wnr ? (wnr.name + ' 승') : '무승부';
         }
-      } else title = game.winTeam === 0 ? '토벌 성공' : '토벌 실패';
+      } else if (game.mode === 'boss') {
+        const b = bosses[0];
+        title = b ? (b.name + ' 격파') : '보스 격파';
+      }
       text(title, x, y, 26, '#eceae4');
       claimReward();
       y += 40;
@@ -3781,13 +3905,12 @@ function renderBattle() {
         text(bits.join('    '), x, y, 14, '#8d8a82');
         y += 32;
       } else y += 8;
-      if (net.role !== 'guest' && game.mode === 'raid' && game.winTeam !== 0) {
-        button(x, y, 220, 40, '이 단계 다시', () => { if (net.role === 'host') restartOnline(); else retryRaid(false); });
+      if (game.mode === 'boss' && !net.role) {
+        button(x, y, 220, 40, '다시', () => {
+          const s = game.setup || {};
+          startBoss(s.char || S.me, s.which || 'slime');
+        });
         y += 44;
-        if (!net.role) {
-          button(x, y, 220, 40, '단계 선택', () => { S.me = game.setup.char; S.which = game.which; S.screen = 'stages'; game = null; });
-          y += 44;
-        }
       } else if ((game.mode === 'duel' || game.mode === 'gem' || game.mode === 'ball' || game.mode === 'hill') && !net.role) {
         button(x, y, 220, 40, '다시', () => {
           const s = game.setup;
@@ -4000,6 +4123,7 @@ function frameMenu() {
     button(x, 312, 260, 40, '잼 그랩', () => openPick('내 캐릭터', me => startObjective('gem', me)));
     button(x, 356, 260, 40, '배스킷 볼', () => openPick('내 캐릭터', me => startObjective('ball', me)));
     button(x, 400, 260, 40, '점령', () => openPick('내 캐릭터', me => startObjective('hill', me)));
+    button(x, 444, 260, 40, '보스', () => openPick('내 캐릭터', me => { S.me = me; S.screen = 'bosses'; }));
     button(x, H - 72, 120, 40, '뒤로', () => { S.screen = 'title'; });
   } else if (S.screen === 'help') {
     showName(false);
@@ -4014,7 +4138,7 @@ function frameMenu() {
       ['회복', '3초 동안 안 싸우면 천천히'],
       ['시야', '7칸 밖은 안 보임'],
       ['잡몹', '대전에서만. 잡으면 이속, 회복, 추가 체력'],
-      ['토벌', '그 보너스 없음. 12단계 다음이 보스'],
+      ['보스', '3대1. 죽으면 10초 뒤 아군 옆에서 부활'],
       ['2P', '방향키, 위 점프, K 좌클릭, L 우클릭'],
       ['잼 그랩', '3대3. 보석 8개면 카운트. 사람 대전 방과 매칭도 됨'],
       ['배스킷 볼', '3대3. 5점. 골 뒤 2초 만에 스폰. 사람 대전에서도 F로 던짐'],
@@ -4116,8 +4240,7 @@ function frameMenu() {
     button(x, 164, 260, 40, '무작위 매칭', () => openPick('매칭 캐릭터', c => { S.me = c; S.screen = 'qmode'; }), {off:!online});
     button(x, 208, 260, 40, '방 만들기', () => makeRoom(), {off:!online});
     button(x, 252, 260, 40, '코드로 들어가기', () => { S.code = ''; nameEl.blur(); S.screen = 'join'; }, {off:!online});
-    button(x, 308, 260, 40, '토벌대', () => openPick('토벌 캐릭터', c => { S.me = c; S.which = 'slime'; S.screen = 'stages'; }));
-    button(x, 352, 260, 40, '같은 화면', () => openPick('1P', c => { S.me = c; openPick('2P', f => startDuel(c, f, {ai:false, local2p:true, name1:myName(), name2:'2P'})); }));
+    button(x, 308, 260, 40, '같은 화면', () => openPick('1P', c => { S.me = c; openPick('2P', f => startDuel(c, f, {ai:false, local2p:true, name1:myName(), name2:'2P'})); }));
     if (fb.state === 'denied') {
       text('Realtime Database 규칙에 아래를 넣고 저장하면 매칭이 열립니다.', x, 420, 13, '#8d8a82');
       text('{ "rules": { "queue": {".read": true, ".write": true}, "rooms": {".read": true, ".write": true}, "users": {".read": true, ".write": true} } }', x, 442, 13, '#eceae4');
@@ -4133,8 +4256,6 @@ function frameMenu() {
     button(x, 312, 260, 40, '잼 그랩', () => startQueue('gem', null, 6));
     button(x, 356, 260, 40, '배스킷 볼', () => startQueue('ball', null, 6));
     button(x, 400, 260, 40, '점령', () => startQueue('hill', null, 6));
-    button(x, 456, 260, 40, '슬라임 토벌', () => startQueue('raid', 'slime', 2));
-    button(x, 500, 260, 40, '검은 기사단', () => startQueue('raid', 'knight', 2));
     button(x, H - 72, 120, 40, '뒤로', () => { S.screen = 'pvp'; });
   } else if (S.screen === 'queue') {
     showName(true);
@@ -4182,28 +4303,17 @@ function frameMenu() {
     });
     y += 44;
     if (net.role === 'host') {
-      button(x, y, 120, 34, '대전', () => setRoomSize(room.mode === 'raid' ? 2 : (room.size || size)), {on:room.mode === 'duel'});
-      button(x + 128, y, 120, 34, '토벌', () => setRaidMode(), {on:room.mode === 'raid'});
+      button(x, y, 120, 34, '대전', () => setRoomSize(room.size || size), {on:room.mode === 'duel' || room.mode === 'raid'});
       y += 42;
       button(x, y, 120, 34, '잼 그랩', () => setObjective('gem'), {on:room.mode === 'gem'});
       button(x + 128, y, 140, 34, '배스킷 볼', () => setObjective('ball'), {on:room.mode === 'ball'});
       button(x + 276, y, 100, 34, '점령', () => setObjective('hill'), {on:room.mode === 'hill'});
       y += 42;
-      if (room.mode === 'raid') {
-        button(x, y, 120, 32, '슬라임', () => patchRoom({raid:'slime'}), {on:room.raid !== 'knight'});
-        button(x + 128, y, 120, 32, '기사단', () => patchRoom({raid:'knight'}), {on:room.raid === 'knight'});
-        text('단계 ' + (room.stage || 1), x + 264, y + 8, 14, '#eceae4');
-        button(x + 340, y, 32, 32, '−', () => patchRoom({stage:Math.max(1, (room.stage || 1) - 1)}), {align:'center', pad:0});
-        button(x + 376, y, 32, 32, '+', () => patchRoom({stage:Math.min(12, (room.stage || 1) + 1)}), {align:'center', pad:0});
-        y += 42;
-      }
       const ready = roster.length >= size;
       button(x, y, 160, 40, '시작', () => startOnline(), {off:!ready});
       if (!ready) button(x + 176, y, 168, 40, 'AI로 채우기', () => fillWithAi());
     } else {
-      const modeText = room.mode === 'raid'
-        ? ((room.raid === 'knight' ? '기사단 ' : '슬라임 ') + (room.stage || 1))
-        : room.mode === 'gem' ? '잼 그랩'
+      const modeText = room.mode === 'gem' ? '잼 그랩'
         : room.mode === 'ball' ? '배스킷 볼'
         : room.mode === 'hill' ? '점령'
         : (size === 6 ? '3대3' : size === 4 ? '2대2' : '대전');
@@ -4211,25 +4321,14 @@ function frameMenu() {
       text('방장이 시작하면 들어갑니다.', x, y + 28, 14, '#8d8a82');
     }
     button(x, H - 56, 120, 40, '나가기', () => leaveMatch());
-  } else if (S.screen === 'stages') {
+  } else if (S.screen === 'bosses') {
     showName(false);
-    text('토벌', x, 48, 26, '#eceae4');
-    button(x, 96, 140, 36, '슬라임', () => { S.which = 'slime'; }, {on:S.which === 'slime'});
-    button(x + 148, 96, 140, 36, '기사단', () => { S.which = 'knight'; }, {on:S.which === 'knight'});
-    const which = S.which;
-    const info = which === 'slime'
-      ? '단계×2+1   러셔 10   런쳐 40   핀트 50'
-      : '|단계×3−5|   러셔 50   런쳐 30   핀트 20';
-    text(info, x, 148, 13, '#8d8a82');
-    text('최대 6마리. 줄면 8칸 밖에서 바로 나옴. 12단계 다음이 보스.', x, 168, 13, '#8d8a82');
-    const unlocked = progress[which] || 1;
-    for (let i = 1; i <= 12; i++) {
-      const col = (i - 1) % 6, row = Math.floor((i - 1) / 6);
-      button(x + col * 56, 204 + row * 48, 50, 40, String(i), () => startRaid(S.me, which, i, false, {coop:S.coop, name1:myName()}), {off:i > unlocked, align:'center', pad:0, fs:16});
-    }
-    button(x, 312, 140, 40, '보스', () => startRaid(S.me, which, 12, true, {coop:S.coop, name1:myName()}), {off:!progress[which + 'Boss']});
-    button(x, H - 72, 140, 40, S.coop ? '같이' : '혼자', () => { S.coop = !S.coop; }, {on:S.coop});
-    button(x + 156, H - 72, 120, 40, '뒤로', () => { S.screen = 'pvp'; });
+    text('보스', x, 88, 26, '#eceae4');
+    text('3대1. 죽으면 10초 뒤 살아있는 아군 옆에서 돌아옵니다.', x, 126, 14, '#8d8a82');
+    [['slime', '슬라임  64'], ['white', '백색기사  56'], ['dark', '암흑 기사  88'], ['shade', '그림자의 왕  110']].forEach((row, i) => {
+      button(x, 168 + i * 48, 280, 40, row[1], () => startBoss(S.me, row[0]));
+    });
+    button(x, H - 72, 120, 40, '뒤로', () => { S.screen = 'aimode'; });
   }
 }
 
@@ -4463,21 +4562,8 @@ function beginOnlineGame(room) {
   if (net.playing) return;
   net.role = net.role || 'host';
   const list = orderedPlayers(room);
-  const h = list[0] || room.host || {};
-  const g = list[1] || room.guest || {};
-  if (room.mode === 'raid') {
-    startRaid(h.char || 'charger', room.raid || 'slime', room.stage || 1, false, {name1:h.name, p2char:g.char || 'charger', name2:g.name});
-    if (fighters[0]) fighters[0].owner = h.id || myId;
-    if (fighters[1]) {
-      fighters[1].team = 0;
-      fighters[1].owner = g.id || null;
-      fighters[1].ai = !!g.ai;
-    }
-    net.myTeam = 0;
-  } else {
-    startTeam(list);
-    if (objKind(room.mode)) initObjective(room.mode);
-  }
+  startTeam(list);
+  if (objKind(room.mode)) initObjective(room.mode);
   net.playing = true;
   net.remote = null;
   net.remotes = {};
@@ -4996,6 +5082,7 @@ function frameBattle(dt) {
 }
 
 function loop(now) {
+  requestAnimationFrame(loop);
   const dt = Math.min(0.033, (now - (loop.t || now)) / 1000) || 0.016;
   loop.t = now;
   hits = [];
@@ -5025,9 +5112,8 @@ function loop(now) {
     }
   }
   prevK.Space = keys.Space;
-  ear();
-  tickMusic();
-  requestAnimationFrame(loop);
+  try { ear(); } catch (e) {}
+  try { tickMusic(); } catch (e) {}
 }
 
 window.G = {get fighters(){return fighters;}, get game(){return game;}, get acct(){return acct;}, hurt, startDuel, startTeam, DB};
