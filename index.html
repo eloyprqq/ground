@@ -2350,6 +2350,7 @@ function reviveFighter(f) {
 }
 function tickRespawn(dt) {
   if (!game || (game.mode !== 'gem' && game.mode !== 'ball' && game.mode !== 'hill' && game.mode !== 'boss')) return;
+  if (game.mode === 'boss' && fighters.every(f => f.dead)) return;
   for (const f of fighters) {
     if (!f.dead || !(f.respawn > 0)) continue;
     f.respawn -= dt;
@@ -2826,8 +2827,12 @@ function simulate(dt) {
     if (fighters.length >= 2 && aliveTeams.size <= 1) {
       game.over = true; game.winTeam = aliveTeams.size ? [...aliveTeams][0] : -1;
     }
-  } else if (game.mode !== 'gem' && game.mode !== 'ball' && game.mode !== 'hill' && game.mode !== 'boss' && fighters.every(f => f.dead)) { game.over = true; game.winTeam = -1; }
-  else if (game.bossing && bosses.length && bosses.every(b => b.dead)) { game.over = true; game.winTeam = 0; }
+  } else if (game.bossing && bosses.length && bosses.every(b => b.dead)) { game.over = true; game.winTeam = 0; }
+  else if (game.mode !== 'gem' && game.mode !== 'ball' && game.mode !== 'hill' && fighters.every(f => f.dead)) {
+    if (game.mode === 'boss') fighters.forEach(f => { f.respawn = 0; });
+    game.over = true;
+    game.winTeam = game.mode === 'boss' ? 2 : -1;
+  }
 }
 
 let camCache = null;
@@ -3893,7 +3898,7 @@ function renderBattle() {
         }
       } else if (game.mode === 'boss') {
         const b = bosses[0];
-        title = b ? (b.name + ' 격파') : '보스 격파';
+        title = game.winTeam === 0 ? (b ? (b.name + ' 격파') : '보스 격파') : '전멸';
       }
       text(title, x, y, 26, '#eceae4');
       claimReward();
@@ -4138,7 +4143,7 @@ function frameMenu() {
       ['회복', '3초 동안 안 싸우면 천천히'],
       ['시야', '7칸 밖은 안 보임'],
       ['잡몹', '대전에서만. 잡으면 이속, 회복, 추가 체력'],
-      ['보스', '3대1. 죽으면 10초 뒤 아군 옆에서 부활'],
+      ['보스', '3대1. 아군이 있으면 10초 뒤 부활. 전멸하면 패배'],
       ['2P', '방향키, 위 점프, K 좌클릭, L 우클릭'],
       ['잼 그랩', '3대3. 보석 8개면 카운트. 사람 대전 방과 매칭도 됨'],
       ['배스킷 볼', '3대3. 5점. 골 뒤 2초 만에 스폰. 사람 대전에서도 F로 던짐'],
@@ -4324,7 +4329,7 @@ function frameMenu() {
   } else if (S.screen === 'bosses') {
     showName(false);
     text('보스', x, 88, 26, '#eceae4');
-    text('3대1. 죽으면 10초 뒤 살아있는 아군 옆에서 돌아옵니다.', x, 126, 14, '#8d8a82');
+    text('3대1. 아군이 살아 있으면 10초 뒤 옆에서 돌아옵니다. 전멸하면 패배.', x, 126, 14, '#8d8a82');
     [['slime', '슬라임  64'], ['white', '백색기사  56'], ['dark', '암흑 기사  88'], ['shade', '그림자의 왕  110']].forEach((row, i) => {
       button(x, 168 + i * 48, 280, 40, row[1], () => startBoss(S.me, row[0]));
     });
