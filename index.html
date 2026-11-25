@@ -4527,7 +4527,7 @@ function showLink(on, x, y) {
   linkEl.style.display = 'block';
   linkEl.style.left = x + 'px';
   linkEl.style.top = y + 'px';
-  linkEl.placeholder = acct.user && acct.link ? '새 코드' : '연동 코드';
+  linkEl.placeholder = '코드 입력';
 }
 function mx() { return Math.max(56, Math.round(W * 0.08)); }
 const titleCast = (() => {
@@ -4679,8 +4679,9 @@ function frameMenu() {
       button(x + 176, y0 + 48, 168, 36, '10 PP → 5 코인', () => trade(false), {off:acct.pp < 10, fs:14});
       text(acct.link ? '연동 코드  설정됨' : '연동 코드', x, y0 + 96, 13, '#8d8a82');
       showLink(true, x, y0 + 116);
-      button(x + 228, y0 + 112, 100, 36, '저장', () => setLinkCode(), {off:acct.busy, fs:14});
-      menuY = y0 + 164;
+      button(x + 228, y0 + 112, 120, 36, '코드 설정', () => setLinkCode(), {off:acct.busy, fs:14});
+      if (acct.msg) text(acct.msg, x, y0 + 156, 13, acct.msg === '연동 코드를 저장했습니다' ? '#eceae4' : '#e23b3b');
+      menuY = y0 + 188;
     }
     button(x, menuY, 240, 42, 'AI 대전', () => { S.screen = 'aimode'; });
     button(x, menuY + 46, 240, 42, '사람 대전', () => { S.screen = 'pvp'; pingFB(); });
@@ -4696,7 +4697,6 @@ function frameMenu() {
     if (acct.user) button(x, H - 72, 160, 40, '로그아웃', () => googleLogout());
     else button(x, H - 72, 220, 40, acct.busy ? '로그인 중' : 'Google로 로그인', () => googleLogin(), {off:acct.busy});
     button(x + (acct.user ? 176 : 236), H - 72, 120, 40, sound ? '소리 켜짐' : '소리 꺼짐', toggleSound, {on:sound});
-    if (acct.user && acct.msg) text(acct.msg, x, H - 104, 13, '#e23b3b');
   } else if (S.screen === 'aimode') {
     showName(false);
     text('AI 대전', x, 88, 26, '#eceae4');
