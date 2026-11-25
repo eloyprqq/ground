@@ -10,13 +10,16 @@
 <style>
   html,body{margin:0;height:100%;background:#121418;overflow:hidden;font-family:"Malgun Gothic","Apple SD Gothic Neo",sans-serif;color:#eceae4}
   canvas{display:block;width:100%;height:100%;cursor:crosshair}
-  #nm{position:fixed;z-index:4;display:none;width:160px;text-align:left;
+  #nm,#lk{position:fixed;z-index:4;display:none;text-align:left;
     font:500 15px "Malgun Gothic",sans-serif;color:#eceae4;
     background:#1a1c22;border:0;border-bottom:2px solid #e23b3b;padding:6px 2px;outline:none}
+  #nm{width:160px}
+  #lk{width:220px}
 </style>
 </head>
 <body>
 <input id="nm" maxlength="12" autocomplete="off" spellcheck="false" placeholder="이름">
+<input id="lk" maxlength="32" autocomplete="off" spellcheck="false" placeholder="연동 코드">
 <canvas id="c"></canvas>
 <script>
 (() => {
@@ -34,6 +37,7 @@ const FBAPP = {
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const nameEl = document.getElementById('nm');
+const linkEl = document.getElementById('lk');
 ctx.imageSmoothingEnabled = true;
 
 let actx = null, noiseBuf = null;
@@ -291,7 +295,7 @@ try { progress = Object.assign(progress, JSON.parse(localStorage.getItem('ground
 
 const S = {screen:'title', back:'title', code:'', me:'charger', foe:'spinner', coop:false, which:'slime', pause:false, pickTitle:'', pickCb:null, qsize:2};
 const fb = {state:'unknown', msg:''};
-const acct = {user:null, coin:0, pp:0, rise:{}, msg:'', busy:false, ready:false};
+const acct = {user:null, coin:0, pp:0, rise:{}, msg:'', busy:false, ready:false, link:false, linkHash:''};
 let acctGen = 0, acctSave = Promise.resolve();
 const net = {role:null, code:'', room:null, busy:false, acc:0, inAcc:0, myTeam:0, viewFresh:false, outSeq:0, remotes:{}, remoteAt:{}, taps:{}, holdLobby:false, seatBusy:false};
 
@@ -309,18 +313,20 @@ function initAuth() {
   catch (e) { acct.msg = '로그인 설정을 열지 못했습니다'; return; }
   acct._init = true;
   firebase.auth().onAuthStateChanged(user => {
-    acctGen++;
-    if (!user) {
-      acct.user = null; acct.coin = 0; acct.pp = 0; acct.rise = {}; acct.ready = false;
+    const gen = ++acctGen;
+    if (user) {
+      localStorage.removeItem('ground-link');
+      acct.user = {uid:user.uid, name:(user.displayName || '플레이어').slice(0, 12), email:user.email || '', google:true};
+      acct.ready = false;
+      if ((localStorage.getItem('ground-name') || '플레이어') === '플레이어' && user.displayName) {
+        nameEl.value = acct.user.name;
+        localStorage.setItem('ground-name', nameEl.value);
+      }
+      claimLinkMail(user).catch(() => {}).then(() => { if (gen === acctGen) loadAccount(); });
       return;
     }
-    acct.user = {uid:user.uid, name:(user.displayName || '플레이어').slice(0, 12), email:user.email || ''};
-    acct.ready = false;
-    if ((localStorage.getItem('ground-name') || '플레이어') === '플레이어' && user.displayName) {
-      nameEl.value = acct.user.name;
-      localStorage.setItem('ground-name', nameEl.value);
-    }
-    loadAccount();
+    if (acct.user && acct.user.google) clearAccount();
+    if (!acct.user) resumeLink(gen);
   });
 }
 async function loadAccount() {
@@ -333,6 +339,9 @@ async function loadAccount() {
     acct.coin = data.coin || 0;
     acct.pp = data.pp || 0;
     acct.rise = data.rise || {};
+    acct.link = !!data.link;
+    acct.linkHash = data.linkHash || '';
+    if (!acct.user.email && data.email) acct.user.email = data.email;
     acct.ready = true;
     writeLocal(uid);
   } catch (e) {
@@ -354,6 +363,7 @@ function saveAccount() {
   const uid = acct.user.uid;
   writeLocal(uid);
   const body = {name:acct.user.name, coin:acct.coin | 0, pp:acct.pp | 0, rise:Object.assign({}, acct.rise), ts:Date.now()};
+  if (acct.user.email) body.email = acct.user.email;
   acctGen++;
   acctSave = acctSave.then(() => fbReq('PATCH', '/users/' + uid, body)).catch(e => {
     acct.msg = e && (e.status === 401 || e.status === 403) ? '서버 규칙에 users를 열어야 다른 기기와 맞춰집니다' : '계정을 저장하지 못했습니다';
@@ -377,10 +387,128 @@ async function googleLogin() {
   }
   acct.busy = false;
 }
+function clearAccount() {
+  acct.user = null; acct.coin = 0; acct.pp = 0; acct.rise = {}; acct.ready = false; acct.link = false; acct.linkHash = '';
+}
 function googleLogout() {
   acct.msg = '';
+  localStorage.removeItem('ground-link');
+  acctGen++;
+  clearAccount();
   if (typeof firebase !== 'undefined' && firebase.auth) firebase.auth().signOut().catch(() => {});
-  acct.user = null; acct.coin = 0; acct.pp = 0; acct.rise = {}; acct.ready = false;
+}
+function mailKey(email) {
+  return String(email || '').trim().toLowerCase().replace(/[.#$[\]/]/g, ',');
+}
+function cleanCode(raw) {
+  const code = String(raw || '').trim();
+  if (code.length < 4 || code.length > 32 || /\s/.test(code)) return '';
+  return code;
+}
+async function linkHash(code) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('ground-link:' + code));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+function applyLinked(uid, data) {
+  acct.user = {uid, name:(data.name || '플레이어').slice(0, 12), email:data.email || '', google:false};
+  acct.coin = data.coin || 0;
+  acct.pp = data.pp || 0;
+  acct.rise = data.rise || {};
+  acct.link = !!data.link;
+  acct.linkHash = data.linkHash || '';
+  acct.ready = true;
+  writeLocal(uid);
+}
+async function resumeLink(gen) {
+  const uid = localStorage.getItem('ground-link');
+  if (!uid) return;
+  try {
+    const data = await fbReq('GET', '/users/' + uid) || {};
+    if (gen !== acctGen || acct.user) return;
+    applyLinked(uid, data);
+  } catch (e) {}
+}
+async function claimLinkMail(user) {
+  const email = (user.email || '').trim().toLowerCase();
+  if (!email) return;
+  const mail = await fbReq('GET', '/users/_mail/' + mailKey(email));
+  if (!mail || !mail.hash) return;
+  const link = await fbReq('GET', '/users/_link/' + mail.hash) || {};
+  if (link.uid && link.uid !== user.uid) return;
+  await fbReq('PUT', '/users/_link/' + mail.hash, {uid:user.uid, email});
+  await fbReq('PATCH', '/users/' + user.uid, {link:1, linkHash:mail.hash, email});
+  if (acct.user && acct.user.uid === user.uid) {
+    acct.link = true;
+    acct.linkHash = mail.hash;
+    acct.user.email = email;
+  }
+}
+async function enterByCode() {
+  if (acct.busy) return;
+  const code = cleanCode(linkEl.value);
+  if (!code) { acct.msg = '연동 코드는 4자 이상입니다'; return; }
+  acct.busy = true;
+  acct.msg = '';
+  const gen = ++acctGen;
+  try {
+    const row = await fbReq('GET', '/users/_link/' + await linkHash(code));
+    if (gen !== acctGen) return;
+    if (!row || !row.uid) {
+      acct.msg = row && row.email ? '구글로 한 번 로그인하면 이 코드가 붙습니다' : '없는 연동 코드입니다';
+      return;
+    }
+    const data = await fbReq('GET', '/users/' + row.uid) || {};
+    if (gen !== acctGen) return;
+    localStorage.setItem('ground-link', row.uid);
+    applyLinked(row.uid, data);
+    linkEl.value = '';
+    linkEl.blur();
+    acct.msg = '';
+  } catch (e) {
+    if (gen === acctGen) acct.msg = '연동에 실패했습니다';
+  } finally {
+    acct.busy = false;
+  }
+}
+async function setLinkCode() {
+  if (!acct.user) { acct.msg = '로그인이 필요합니다'; return; }
+  if (acct.busy) return;
+  const code = cleanCode(linkEl.value);
+  if (!code) { acct.msg = '연동 코드는 4자 이상입니다'; return; }
+  acct.busy = true;
+  acct.msg = '';
+  try {
+    const hash = await linkHash(code);
+    const row = await fbReq('GET', '/users/_link/' + hash);
+    if (row && row.uid && row.uid !== acct.user.uid) { acct.msg = '이미 쓰인 연동 코드입니다'; return; }
+    const prev = acct.linkHash || '';
+    if (prev && prev !== hash) {
+      const old = await fbReq('GET', '/users/_link/' + prev);
+      await fbReq('DELETE', '/users/_link/' + prev);
+      if (old && old.email) {
+        const key = mailKey(old.email);
+        const mail = await fbReq('GET', '/users/_mail/' + key);
+        if (mail && mail.hash === prev) await fbReq('DELETE', '/users/_mail/' + key);
+      }
+    }
+    const email = (acct.user.email || (row && row.email) || '').trim().toLowerCase();
+    const linkBody = {uid:acct.user.uid};
+    if (email) linkBody.email = email;
+    await fbReq('PUT', '/users/_link/' + hash, linkBody);
+    if (email) await fbReq('PUT', '/users/_mail/' + mailKey(email), {hash});
+    const patch = {link:1, linkHash:hash};
+    if (email) patch.email = email;
+    await fbReq('PATCH', '/users/' + acct.user.uid, patch);
+    acct.link = true;
+    acct.linkHash = hash;
+    linkEl.value = '';
+    linkEl.blur();
+    acct.msg = '연동 코드를 저장했습니다';
+  } catch (e) {
+    acct.msg = '연동 코드를 저장하지 못했습니다';
+  } finally {
+    acct.busy = false;
+  }
 }
 function raiseChar(id) {
   if (!acct.user) { acct.msg = '로그인이 필요합니다'; return; }
@@ -475,6 +603,10 @@ addEventListener('pointerup', e => {
 });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 addEventListener('keydown', e => {
+  if (document.activeElement === linkEl) {
+    if (e.code === 'Enter') { e.preventDefault(); if (acct.user) setLinkCode(); else enterByCode(); }
+    return;
+  }
   audio();
   keys[e.code] = true;
   if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
@@ -4390,6 +4522,13 @@ function showName(on) {
   nameEl.style.top = (S.screen === 'lobby' ? 52 : 86) + 'px';
   nameEl.style.transform = 'none';
 }
+function showLink(on, x, y) {
+  if (!on) { linkEl.style.display = 'none'; return; }
+  linkEl.style.display = 'block';
+  linkEl.style.left = x + 'px';
+  linkEl.style.top = y + 'px';
+  linkEl.placeholder = acct.user && acct.link ? '새 코드' : '연동 코드';
+}
 function mx() { return Math.max(56, Math.round(W * 0.08)); }
 const titleCast = (() => {
   const ids = CHARS.map(c => c.id);
@@ -4522,6 +4661,7 @@ function paintHall() {
   ctx.fillRect(0, y + 2, W, 4);
 }
 function frameMenu() {
+  if (S.screen !== 'title') showLink(false);
   if (S.screen === 'title') paintTitleBack();
   else paintHall();
   const x = mx();
@@ -4537,16 +4677,26 @@ function frameMenu() {
       text('코인  ' + acct.coin + '     PP  ' + acct.pp, x, y0 + 24, 14, '#8d8a82');
       button(x, y0 + 48, 168, 36, '10 코인 → 5 PP', () => trade(true), {off:acct.coin < 10, fs:14});
       button(x + 176, y0 + 48, 168, 36, '10 PP → 5 코인', () => trade(false), {off:acct.pp < 10, fs:14});
-      menuY = y0 + 100;
+      text(acct.link ? '연동 코드  설정됨' : '연동 코드', x, y0 + 96, 13, '#8d8a82');
+      showLink(true, x, y0 + 116);
+      button(x + 228, y0 + 112, 100, 36, '저장', () => setLinkCode(), {off:acct.busy, fs:14});
+      menuY = y0 + 164;
     }
     button(x, menuY, 240, 42, 'AI 대전', () => { S.screen = 'aimode'; });
     button(x, menuY + 46, 240, 42, '사람 대전', () => { S.screen = 'pvp'; pingFB(); });
     button(x, menuY + 92, 240, 42, '조작', () => { S.screen = 'help'; });
     button(x, menuY + 138, 240, 42, '영웅', () => openPick('영웅', null));
+    if (!acct.user) {
+      const linkY = menuY + 196;
+      text('연동 코드', x, linkY, 13, '#8d8a82');
+      showLink(true, x, linkY + 20);
+      button(x + 228, linkY + 16, 120, 36, '들어가기', () => enterByCode(), {off:acct.busy, fs:14});
+      if (acct.msg) text(acct.msg, x, linkY + 58, 13, '#e23b3b');
+    }
     if (acct.user) button(x, H - 72, 160, 40, '로그아웃', () => googleLogout());
     else button(x, H - 72, 220, 40, acct.busy ? '로그인 중' : 'Google로 로그인', () => googleLogin(), {off:acct.busy});
     button(x + (acct.user ? 176 : 236), H - 72, 120, 40, sound ? '소리 켜짐' : '소리 꺼짐', toggleSound, {on:sound});
-    if (acct.msg) text(acct.msg, x, H - 104, 13, '#e23b3b');
+    if (acct.user && acct.msg) text(acct.msg, x, H - 104, 13, '#e23b3b');
   } else if (S.screen === 'aimode') {
     showName(false);
     text('AI 대전', x, 88, 26, '#eceae4');
@@ -4597,6 +4747,7 @@ function frameMenu() {
       ]],
       ['계정', [
         ['계정', '승리하면 코인 4~7, PP 4~7. 30%는 둘 다. 영웅 창에서 상승'],
+        ['연동', '코드를 저장하면, 로그인 없이 그 코드로 같은 계정에 들어간다'],
         ['교환', '10 코인으로 5 PP. 10 PP로 5 코인']
       ]]
     ];
@@ -5635,7 +5786,11 @@ function predict(dt) {
 }
 function frameBattle(dt) {
   showName(false);
-  if (document.activeElement === nameEl) nameEl.blur();
+  showLink(false);
+  if (document.activeElement === nameEl || document.activeElement === linkEl) {
+    nameEl.blur();
+    linkEl.blur();
+  }
   if (net.role === 'guest') {
     predict(dt);
     renderBattle();
